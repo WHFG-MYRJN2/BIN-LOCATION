@@ -2022,28 +2022,33 @@ function loadLainlainList() {
   );
 }
 
-function renderLainlainList(rawData) {
-  // Filter lokasi non-racking (capacity = 0)
-  var CAP_CFG = [
-    {l:'A',f:1,t:28},{l:'B',f:1,t:25},{l:'C',f:1,t:25},
-    {l:'D',f:1,t:25},{l:'E',f:1,t:25},{l:'F',f:1,t:25},
-    {l:'G',f:1,t:32},{l:'H',f:1,t:35},
-    {l:'I',f:1,t:43}
-  ];
-  function isRacking(bin) {
-    var m = bin.match(/^([A-Z]+)(\d+)$/);
-    if (!m) return false;
-    var L = m[1], n = parseInt(m[2]);
-    for (var i = 0; i < CAP_CFG.length; i++) {
-      if (CAP_CFG[i].l===L && n>=CAP_CFG[i].f && n<=CAP_CFG[i].t) return true;
-    }
-    return false;
-  }
+// ── Nama & kapasitas Bin Tambahan (non-racking) — T1-T36 ──
+var T_BIN_NAMES = {
+  'T1':{name:'DEPAN BLOK A', cap:28}, 'T2':{name:'DEPAN BLOK B', cap:25},
+  'T3':{name:'DEPAN BLOK D', cap:25}, 'T4':{name:'DEPAN BLOK E', cap:25},
+  'T5':{name:'DEPAN BLOK F', cap:25}, 'T6':{name:'DEPAN BLOK G', cap:25},
+  'T7':{name:'DEPAN BLOK H', cap:25}, 'T8':{name:'KERANGKENG 1', cap:5},
+  'T9':{name:'KERANGKENG 2', cap:5}, 'T10':{name:'KERANGKENG 3', cap:5},
+  'T11':{name:'KERANGKENG 4', cap:5}, 'T12':{name:'KERANGKENG 5', cap:5},
+  'T13':{name:'KERANGKENG 6', cap:5}, 'T14':{name:'KERANGKENG 7', cap:5},
+  'T15':{name:'SAMPING BLOK G', cap:3}, 'T16':{name:'DEPAN KERANGKENG G-F', cap:3},
+  'T17':{name:'DEPAN KERANGKENG D-E', cap:3}, 'T18':{name:'DEPAN KERANGKENG B-C', cap:3},
+  'T19':{name:'DEPAN ROLLING DOOR D-E', cap:3}, 'T20':{name:'DEPAN ROLLING DOOR F-G', cap:3},
+  'T21':{name:'DEPAN ROLLING DOOR B-C', cap:3}, 'T22':{name:'HABIEM LORONG BLOK I 1', cap:5},
+  'T23':{name:'HABIEM LORONG BLOK I 2', cap:5}, 'T24':{name:'HABIEM LORONG BLOK I 3', cap:5},
+  'T25':{name:'HABIEM LORONG BLOK I 4', cap:5}, 'T26':{name:'HABIEM LORONG BLOK I 5', cap:5},
+  'T27':{name:'HABIEM LORONG BLOK I 6', cap:5}, 'T28':{name:'HABIEM LORONG BLOK I 7', cap:5},
+  'T29':{name:'HABIEM LORONG BLOK I 8', cap:5}, 'T30':{name:'HABIEM LORONG BLOK I 9', cap:5},
+  'T31':{name:'KERANGKENG BLOK I 1', cap:4}, 'T32':{name:'KERANGKENG BLOK I 2', cap:4},
+  'T33':{name:'KERANGKENG BLOK I 3', cap:4}, 'T34':{name:'KERANGKENG BLOK I 4', cap:4},
+  'T35':{name:'KERANGKENG BLOK I 5', cap:4}, 'T36':{name:'DEPAN BLOK C', cap:25}
+};
 
-  // Agregasi per lokasi lain-lain
+function renderLainlainList(rawData) {
+  // Agregasi stok per bin T (kalau ada datanya)
   var locMap = {};
   rawData.forEach(function(r) {
-    if (!isRacking(r.binLoc)) {
+    if (T_BIN_NAMES[r.binLoc]) {
       var k = r.binLoc;
       if (!locMap[k]) locMap[k] = { items:[], pallet:0 };
       locMap[k].items.push(r);
@@ -2052,29 +2057,29 @@ function renderLainlainList(rawData) {
   });
 
   document.getElementById('lainlain-loading').style.display = 'none';
-  var locs = Object.keys(locMap).sort();
   var listEl = document.getElementById('lainlain-list');
+  listEl.style.display = 'flex';
+  // List TETAP T1-T36 (bukan discovery dari data) — user WAJIB pilih dari sini, tidak bisa
+  // tambah lokasi bebas lagi.
+  var codes = Object.keys(T_BIN_NAMES).sort(function(a,b){ return parseInt(a.slice(1)) - parseInt(b.slice(1)); });
+  listEl.innerHTML = codes.map(function(code) {
+    var meta = T_BIN_NAMES[code];
+    var info = locMap[code];
+    var used = info ? info.pallet : 0;
+    var pct  = meta.cap ? Math.round((used/meta.cap)*100) : 0;
+    var skuList = info ? info.items.slice(0,2).map(function(i){ return i.skuNama||i.skuKode; }).join(', ')
+                  + (info.items.length>2 ? ' +' + (info.items.length-2) + ' lagi' : '') : '';
+    return '<div onclick="selectLainlainLoc(\''+code+'\')" style="'
+      + 'background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;'
+      + 'padding:12px 14px;cursor:pointer;transition:border-color .15s">'
+      + '<div style="font-size:13px;font-weight:800;color:#3b82f6">📍 ' + escHtml(meta.name) + ' <span style="color:var(--muted);font-weight:600;font-size:10px">(' + code + ')</span></div>'
+      + '<div style="font-size:12px;font-weight:700;color:#2563eb;margin-top:2px">' + used + ' / ' + meta.cap + ' plt (' + pct + '%)' + (info ? ' · ' + info.items.length + ' SKU' : '') + '</div>'
+      + (skuList ? '<div style="font-size:10px;color:var(--muted);margin-top:2px">' + escHtml(skuList) + '</div>' : '')
+      + '</div>';
+  }).join('');
 
-  if (!locs.length) {
-    listEl.style.display = 'flex';
-    listEl.innerHTML = '<div style="text-align:center;padding:16px;color:var(--muted);font-size:12px">Belum ada lokasi lain-lain.<br>Tambah lokasi baru di bawah.</div>';
-  } else {
-    listEl.style.display = 'flex';
-    listEl.innerHTML = locs.map(function(loc) {
-      var info    = locMap[loc];
-      var skuList = info.items.slice(0,2).map(function(i){ return i.skuNama||i.skuKode; }).join(', ')
-                  + (info.items.length>2 ? ' +' + (info.items.length-2) + ' lagi' : '');
-      return '<div onclick="selectLainlainLoc(\''+escHtml(loc)+'\')" style="'
-        + 'background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;'
-        + 'padding:12px 14px;cursor:pointer;transition:border-color .15s">'
-        + '<div style="font-size:13px;font-weight:800;color:#3b82f6">📍 ' + escHtml(loc) + '</div>'
-        + '<div style="font-size:12px;font-weight:700;color:#2563eb;margin-top:2px">' + info.pallet + ' plt · ' + info.items.length + ' SKU</div>'
-        + '<div style="font-size:10px;color:var(--muted);margin-top:2px">' + escHtml(skuList) + '</div>'
-        + '</div>';
-    }).join('');
-  }
-
-  document.getElementById('lainlain-add-btn').style.display = '';
+  // Tombol "+ Lokasi Baru" DIHILANGKAN — sekarang wajib pilih dari 36 bin tambahan di atas
+  document.getElementById('lainlain-add-btn').style.display = 'none';
 }
 
 function selectLainlainLoc(loc) {
@@ -3357,6 +3362,59 @@ var _peta3DHoverInfo = {}; // key posIdx -> { binCode, used, capacity, items }
 // E-F berhadapan(jalan), F-G punggungan, G-H berhadapan(jalan), H-I berhadapan(jalan).
 // Rak yang perlu "dicerminkan" (depannya menghadap balik) SAMA persis dengan set yang row
 // numberingnya sudah dibalik sebelumnya: B, D, F, H, I.
+// ── Data Bin T (area non-racking) — 36 bin, posisi hasil tuning final ──
+var T_BIN_DATA = [
+  {num:1, x:0, w:25, rowMid:5.9, thick:0.9},
+  {num:2, x:0, w:25, rowMid:7.1, thick:0.9},
+  {num:3, x:0, w:25, rowMid:12.15, thick:0.9},
+  {num:4, x:0, w:25, rowMid:15.12, thick:0.9},
+  {num:5, x:0, w:25, rowMid:16.3, thick:0.9},
+  {num:6, x:0, w:25, rowMid:20.2, thick:0.9},
+  {num:7, x:0, w:25, rowMid:21.35, thick:0.9},
+  {num:8, x:27, w:1, rowMid:6, thick:4},
+  {num:9, x:27, w:1, rowMid:7.4, thick:5},
+  {num:10, x:27, w:1, rowMid:9.1, thick:5},
+  {num:11, x:27, w:1, rowMid:10.8, thick:5},
+  {num:12, x:27, w:1, rowMid:12.5, thick:5},
+  {num:13, x:27, w:1, rowMid:14.2, thick:5},
+  {num:14, x:27, w:1, rowMid:16, thick:5},
+  {num:15, x:27, w:1, rowMid:19.1, thick:3},
+  {num:16, x:25, w:1, rowMid:17, thick:3},
+  {num:17, x:25, w:1, rowMid:13, thick:5},
+  {num:18, x:25, w:1, rowMid:8.5, thick:5},
+  {num:19, x:-1, w:1, rowMid:13, thick:5},
+  {num:20, x:-1, w:1, rowMid:17.7, thick:5},
+  {num:21, x:-1, w:1, rowMid:22, thick:4},
+  {num:22, x:0, w:3, rowMid:23.7, thick:0.9},
+  {num:23, x:4, w:3, rowMid:23.7, thick:0.9},
+  {num:24, x:8, w:3, rowMid:23.7, thick:0.9},
+  {num:25, x:12, w:3, rowMid:23.7, thick:0.9},
+  {num:26, x:16, w:3, rowMid:23.7, thick:0.9},
+  {num:27, x:20, w:3, rowMid:23.7, thick:0.9},
+  {num:28, x:24, w:3, rowMid:23.7, thick:0.9},
+  {num:29, x:28, w:3, rowMid:23.7, thick:0.9},
+  {num:30, x:32, w:3, rowMid:23.7, thick:0.9},
+  {num:31, x:36, w:1.2, rowMid:23.7, thick:0.9},
+  {num:32, x:37.2, w:1.2, rowMid:23.7, thick:0.9},
+  {num:33, x:38.4, w:1.2, rowMid:23.7, thick:0.9},
+  {num:34, x:39.6, w:1.2, rowMid:23.7, thick:0.9},
+  {num:35, x:40.8, w:1.2, rowMid:23.7, thick:0.9},
+  {num:36, x:0, w:25, rowMid:11, thick:0.9}
+];
+var BORDER_POINTS = [
+  {x:-2, y:4},
+  {x:28.3, y:4},
+  {x:28.3, y:18.5},
+  {x:36.5, y:18.5},
+  {x:36.5, y:23.5},
+  {x:43.5, y:23.5},
+  {x:43.5, y:27},
+  {x:-2, y:27}
+];
+var T_EXCEL_ROW_MIN = 4, T_EXCEL_ROW_MAX = 27;
+var T_STOCK_COLORS = ['#ff0000','#f7ff00','#19e619','#3b82f6','#f97316','#ddb96e'];
+function tSeededRand(seed) { var x = Math.sin(seed*999)*10000; return x - Math.floor(x); }
+
 function petaRender3DAll(allLetters) {
   var LAYOUT_ORDER = ['A','B','C','D','E','F','G','H','I'].filter(function(l){ return allLetters.indexOf(l) !== -1; });
   var MIRRORED = ['B','D','F','H','I'];
@@ -3587,6 +3645,13 @@ function petaRender3DAll(allLetters) {
   var floorPts = [p3dIsoProject(0,0,0), p3dIsoProject(globalMaxX,0,0), p3dIsoProject(globalMaxX,globalMaxY,0), p3dIsoProject(0,globalMaxY,0)]
     .map(function(p){ return p.x.toFixed(1)+','+p.y.toFixed(1); }).join(' ');
   svgParts.push('<polygon points="'+floorPts+'" fill="#dde3ea" stroke="#94a3b8" stroke-width="1.5"/>');
+  // Garis tepi luar (teal) — dari BORDER_POINTS, Y dikonversi proporsional (sama sistem bin T)
+  var tBorderPathPts = BORDER_POINTS.map(function(p) {
+    var yProp = (p.y - T_EXCEL_ROW_MIN) / (T_EXCEL_ROW_MAX - T_EXCEL_ROW_MIN);
+    return p3dIsoProject(p.x, yProp * globalMaxY, 0);
+  });
+  var tBorderD = 'M' + tBorderPathPts.map(function(p){ return p.x.toFixed(1)+','+p.y.toFixed(1); }).join(' L') + ' Z';
+  svgParts.push('<path d="'+tBorderD+'" fill="none" stroke="#0f766e" stroke-width="3.5" stroke-linejoin="round"/>');
   // Lantai abu tua PER-POSISI (bukan 1 kotak besar rata) — otomatis pas mengikuti depth
   // asli tiap posisi, jadi tidak akan ada kotak yang kelihatan "keluar" area abu lagi.
   allFloorRects.forEach(function(r) {
@@ -3594,7 +3659,34 @@ function petaRender3DAll(allLetters) {
     svgParts.push('<polygon points="'+pts+'" fill="#6b7280"/>');
   });
 
+  // ── Bin T (area non-racking) — area abu tua per-bin + kotak isi (kalau ada), TANPA
+  // rangka/tiang. Kotak pakai fungsi kubus yang SAMA dengan rak (p3dCubePolygons), tapi
+  // tanpa garis navy (edges) — biar tidak kesan "rak beneran".
+  var tBinCubes3D = [];
+  T_BIN_DATA.forEach(function(t) {
+    var yProp = (t.rowMid - T_EXCEL_ROW_MIN) / (T_EXCEL_ROW_MAX - T_EXCEL_ROW_MIN);
+    var yPos = yProp * globalMaxY;
+    var areaPts = [
+      p3dIsoProject(t.x, yPos, 0), p3dIsoProject(t.x+t.w, yPos, 0),
+      p3dIsoProject(t.x+t.w, yPos+t.thick, 0), p3dIsoProject(t.x, yPos+t.thick, 0)
+    ].map(function(p){ return p.x.toFixed(1)+','+p.y.toFixed(1); }).join(' ');
+    svgParts.push('<polygon points="'+areaPts+'" fill="#6b7280"/>');
+    var isFilled = tSeededRand(t.num) < 0.45;
+    if (!isFilled) return;
+    var col = T_STOCK_COLORS[Math.floor(tSeededRand(t.num+50) * T_STOCK_COLORS.length)];
+    var alongX = t.w >= t.thick;
+    var maxFit = Math.max(1, Math.floor(alongX ? t.w : t.thick));
+    var filledCount = Math.min(maxFit, 1 + Math.floor(tSeededRand(t.num+100) * 5));
+    for (var pi = 0; pi < filledCount; pi++) {
+      if (alongX) tBinCubes3D.push({ x:t.x+pi, y:yPos, color:col });
+      else tBinCubes3D.push({ x:t.x, y:yPos+pi, color:col });
+    }
+  });
+
   var combined = allCubes.map(function(c){ return { rtype:'cube', x:c.x, y:c.y, z:c.z, colorInfo:c.colorInfo, drawTop:c.drawTop, depth: c.x+c.y-c.z+0.9 }; });
+  tBinCubes3D.forEach(function(tc) {
+    combined.push({ rtype:'tbin', x:tc.x, y:tc.y, color:tc.color, depth: tc.x+tc.y-0+0.9 });
+  });
   allFrameLines.forEach(function(fl) {
     if (fl.type === 'post') {
       combined.push({ rtype:'post', x:fl.x, y:fl.y, z0:fl.z0, z1:fl.z1, depth: fl.x + fl.y - fl.z0 - 0.5 });
@@ -3605,6 +3697,16 @@ function petaRender3DAll(allLetters) {
   combined.sort(function(a,b){ return a.depth - b.depth; });
 
   combined.forEach(function(item) {
+    if (item.rtype === 'tbin') {
+      // Kubus bin T — fungsi SAMA PERSIS dengan kotak rak, TAPI tanpa garis navy (edges)
+      var tResult = p3dCubePolygons(item.x, item.y, 0, p3dColorInfo(item.color), { top:true, faceX:true, faceY:true });
+      tResult.faces.forEach(function(f) {
+        svgParts.push('<polygon points="'+f.pts+'" fill="'+f.fill+'" fill-opacity="'+f.op+'" stroke="#000" stroke-opacity="1" stroke-width="0.5"/>');
+      });
+      tResult.cartonPolys.forEach(function(cp){ svgParts.push('<polygon points="'+cp.pts+'" fill="'+cp.fill+'"/>'); });
+      tResult.cartonLines.forEach(function(cl){ svgParts.push('<line x1="'+cl.p1.x.toFixed(1)+'" y1="'+cl.p1.y.toFixed(1)+'" x2="'+cl.p2.x.toFixed(1)+'" y2="'+cl.p2.y.toFixed(1)+'" stroke="#000" stroke-width="0.5"/>'); });
+      return;
+    }
     if (item.rtype === 'post') {
       var pb = p3dIsoProject(item.x, item.y, item.z0), pt2 = p3dIsoProject(item.x, item.y, item.z1);
       svgParts.push('<line x1="'+pb.x.toFixed(1)+'" y1="'+pb.y.toFixed(1)+'" x2="'+pt2.x.toFixed(1)+'" y2="'+pt2.y.toFixed(1)+'" stroke="'+P3D_RACK_COLOR+'" stroke-width="'+P3D_RACK_WIDTH+'"/>');
