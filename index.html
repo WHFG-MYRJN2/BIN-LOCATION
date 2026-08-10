@@ -3688,14 +3688,14 @@ function petaRender3DAll(allLetters) {
   var svgParts = [];
   svgParts.push('<svg viewBox="'+(minX-pad)+' '+(minY-pad)+' '+w+' '+h+'" style="display:block;width:100%;height:auto;">');
 
-  var floorPts = [p3dIsoProject(0,0,0), p3dIsoProject(globalMaxX,0,0), p3dIsoProject(globalMaxX,globalMaxY,0), p3dIsoProject(0,globalMaxY,0)]
-    .map(function(p){ return p.x.toFixed(1)+','+p.y.toFixed(1); }).join(' ');
-  svgParts.push('<polygon points="'+floorPts+'" fill="#dde3ea" stroke="#94a3b8" stroke-width="1.5"/>');
   // Garis tepi luar (teal) — dari BORDER_POINTS, Y dikonversi proporsional (sama sistem bin T)
   var tBorderPathPts = BORDER_POINTS.map(function(p) {
     var yProp = (p.y - T_EXCEL_ROW_MIN) / (T_EXCEL_ROW_MAX - T_EXCEL_ROW_MIN);
     return p3dIsoProject(p.x, yProp * globalMaxY, 0);
   });
+  // Lantai abu MUDA — bentuknya ikut BORDER_POINTS juga (bukan kotak lurus lagi), persis demo
+  var floorPts = tBorderPathPts.map(function(p){ return p.x.toFixed(1)+','+p.y.toFixed(1); }).join(' ');
+  svgParts.push('<polygon points="'+floorPts+'" fill="#dde3ea" stroke="#94a3b8" stroke-width="1.5"/>');
   var tBorderD = 'M' + tBorderPathPts.map(function(p){ return p.x.toFixed(1)+','+p.y.toFixed(1); }).join(' L') + ' Z';
   svgParts.push('<path d="'+tBorderD+'" fill="none" stroke="#0f766e" stroke-width="3.5" stroke-linejoin="round"/>');
   // Lantai abu tua PER-POSISI (bukan 1 kotak besar rata) — otomatis pas mengikuti depth
