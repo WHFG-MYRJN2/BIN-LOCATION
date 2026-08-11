@@ -192,6 +192,9 @@ input:focus, select:focus {
 .seg-toggle-highlight { position:absolute; top:4px; bottom:4px; left:4px; width:calc(50% - 4px); background:#9333ea; border-radius:20px; transition:transform .25s cubic-bezier(.4,0,.2,1); box-shadow:0 2px 8px rgba(147,51,234,.35); z-index:0; }
 .seg-toggle-btn { position:relative; z-index:1; flex:1; padding:12px 10px; border:none; background:none; font-size:14px; font-weight:800; cursor:pointer; color:var(--muted); border-radius:20px; transition:color .2s; }
 .seg-toggle-btn.active { color:#fff; }
+.seg-toggle-sm { padding:3px; border-radius:18px; }
+.seg-toggle-sm .seg-toggle-btn { padding:6px 12px; font-size:11px; border-radius:15px; }
+.seg-toggle-sm .seg-toggle-highlight { border-radius:15px; top:3px; bottom:3px; left:3px; width:calc(50% - 3px); }
 .bin-mode-toggle{ display:flex; gap:6px; width:100%; max-width:360px; }
 .bin-mode-btn{ flex:1; padding:9px; border-radius:10px; border:1.5px solid var(--border); background:var(--surface2); color:var(--muted); font-size:12px; font-weight:700; cursor:pointer; text-align:center; transition:all .15s; }
 .bin-mode-btn.active{ border-color:var(--accent); background:#2563eb15; color:var(--accent); }
@@ -1268,22 +1271,24 @@ input:focus, select:focus {
           <button onclick="petaRefresh()" id="peta-refresh-btn" style="padding:5px 12px;border:1px solid #3b82f640;border-radius:8px;background:#3b82f615;color:#3b82f6;font-size:10px;font-weight:700;cursor:pointer">🔄 Refresh</button>
         </div>
       </div>
-      <div class="seg-toggle" style="margin:8px 2px 4px;">
-        <div class="seg-toggle-highlight" id="peta2d-toggle-highlight"></div>
-        <button class="seg-toggle-btn active" id="peta2d-mode-aktual" onclick="petaToggle2DMode('aktual')">📐 Aktual</button>
-        <button class="seg-toggle-btn" id="peta2d-mode-simple" onclick="petaToggle2DMode('simple')">🗒️ Simple</button>
+      <div style="display:flex;justify-content:flex-end;padding:8px 2px 4px;">
+        <div class="seg-toggle seg-toggle-sm" style="width:auto;min-width:150px;">
+          <div class="seg-toggle-highlight" id="peta2d-toggle-highlight"></div>
+          <button class="seg-toggle-btn active" id="peta2d-mode-aktual" onclick="petaToggle2DMode('aktual')">📐 Aktual</button>
+          <button class="seg-toggle-btn" id="peta2d-mode-simple" onclick="petaToggle2DMode('simple')">🗒️ Simple</button>
+        </div>
       </div>
       <div id="peta-3d-rack-selector" style="display:none;padding:8px 2px 12px;">
         <div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;margin-bottom:6px;">Pilih Rak</div>
         <div id="peta-3d-rack-chips" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
       </div>
-      <div id="peta-3d-view-toggle" style="display:none;padding:0 2px 8px;gap:6px;flex-direction:column;">
-        <div class="seg-toggle">
+      <div id="peta-3d-view-toggle" style="display:none;padding:0 2px 8px;gap:6px;justify-content:flex-end;align-items:center;">
+        <button id="peta3d-reset-view-btn" onclick="if(window.peta3DResetView)window.peta3DResetView()" style="display:none;padding:6px 12px;border-radius:15px;font-size:11px;font-weight:800;cursor:pointer;background:#374151;color:#fff;border:none;">🏠 Reset</button>
+        <div class="seg-toggle seg-toggle-sm" style="width:auto;min-width:150px;">
           <div class="seg-toggle-highlight" id="peta3d-toggle-highlight"></div>
           <button class="seg-toggle-btn active" id="peta3d-view-aktual" onclick="peta3DSetViewMode('aktual')">🧊 Aktual</button>
           <button class="seg-toggle-btn" id="peta3d-view-rotate" onclick="peta3DSetViewMode('rotate')">🔄 Rotate</button>
         </div>
-        <button id="peta3d-reset-view-btn" onclick="if(window.peta3DResetView)window.peta3DResetView()" style="display:none;padding:12px 10px;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;background:#374151;color:#fff;border:none;">🏠 Reset View</button>
       </div>
       <div id="peta-3d-rotate-wrap" style="display:none;position:relative;height:60vh;touch-action:none;">
         <canvas id="peta3dRotateCanvas" style="display:block;width:100%;height:100%;"></canvas>
