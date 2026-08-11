@@ -7009,32 +7009,54 @@ function _p3dBuildRotateScene() {
   floorMesh.position.set(globalMaxX/2, 0, globalMaxZ/2);
   floorGroup.add(floorMesh);
 
-  // ── Garis tepi luar (teal) — pakai BORDER_POINTS yang sama kayak sistem Bin T,
-  // di-skalakan proporsional (X: rentang asli BORDER_POINTS → globalMaxX; Y row 4-27 → globalMaxZ)
-  // biar bentuk staircase persis sesuai yang Bos tentuin, tapi pas sama ukuran scene 3D ini ──
-  var bpXs = BORDER_POINTS.map(function(p){ return p.x; });
-  var bpXmin = Math.min.apply(null, bpXs), bpXmax = Math.max.apply(null, bpXs);
-  var outlineCorners = BORDER_POINTS.map(function(p) {
-    var xProp = (p.x - bpXmin) / (bpXmax - bpXmin);
-    var yProp = (p.y - T_EXCEL_ROW_MIN) / (T_EXCEL_ROW_MAX - T_EXCEL_ROW_MIN);
-    return { x: xProp * globalMaxX, z: yProp * globalMaxZ };
+  // ── Garis tepi luar (biru tua) — pendekatan "skyline": nempel PERSIS ke ujung rak terlebar
+  // sejauh ini (gak nyusut ke dalam buat blok yang lebih sempit di tengah), transisi/step SELALU
+  // di titik tengah gang antar-blok (aman, gak pernah motong racking) ──
+  var runningMaxX = 0;
+  var outlinePad = 1.5; // jarak aman hanya di sisi LUAR (kiri & belakang), bukan sisi yang nempel rak
+  var outlineCorners = [
+    { x: -outlinePad, z: -outlinePad },
+    { x: 0, z: -outlinePad },
+    { x: 0, z: 0 }
+  ];
+  LAYOUT_ORDER.forEach(function(l, idx) {
+    var s = groups.filter(function(g){return g.bin===l;});
+    var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
+    var nxRaw = Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;}));
+    var extraL = (l === 'G' ? (s.length-1)*3 : 0) + (l === 'I' ? 9 : 0);
+    var myMaxX = nxRaw + extraL;
+    if (myMaxX > runningMaxX) {
+      var stepZ;
+      if (idx === 0) {
+        stepZ = 0;
+      } else {
+        var prevL = LAYOUT_ORDER[idx-1];
+        var prevEnd = rackMeta[prevL].start + maxDepth(prevL);
+        stepZ = (prevEnd + rackMeta[l].start) / 2; // tengah gang — dijamin gak nabrak racking manapun
+      }
+      outlineCorners.push({ x: runningMaxX, z: stepZ });
+      outlineCorners.push({ x: myMaxX, z: stepZ });
+      runningMaxX = myMaxX;
+    }
   });
+  outlineCorners.push({ x: runningMaxX, z: globalMaxZ });
+  outlineCorners.push({ x: runningMaxX, z: globalMaxZ + outlinePad });
+  outlineCorners.push({ x: -outlinePad, z: globalMaxZ + outlinePad });
+  outlineCorners.push({ x: -outlinePad, z: -outlinePad });
   var outlineLinePts = [];
-  for (var oi = 0; oi < outlineCorners.length; oi++) {
-    var pA = outlineCorners[oi];
-    var pB = outlineCorners[(oi + 1) % outlineCorners.length]; // tutup polygon (titik terakhir → titik pertama)
-    outlineLinePts.push(pA.x, 0.02, pA.z, pB.x, 0.02, pB.z);
+  for (var oi = 0; oi < outlineCorners.length - 1; oi++) {
+    outlineLinePts.push(outlineCorners[oi].x, 0.02, outlineCorners[oi].z, outlineCorners[oi+1].x, 0.02, outlineCorners[oi+1].z);
   }
   var outlineGeo = new THREE.BufferGeometry();
   outlineGeo.setAttribute('position', new THREE.Float32BufferAttribute(outlineLinePts, 3));
-  var outlineMat = new THREE.LineBasicMaterial({ color: 0x0d9488, linewidth: 2 });
+  var outlineMat = new THREE.LineBasicMaterial({ color: 0x1e3a8a, linewidth: 2 }); // biru tua
   floorGroup.add(new THREE.LineSegments(outlineGeo, outlineMat));
 
-  // ── Label "LOADING DOCK" — nempel di sisi FRONT (X kecil, arah kamera preset 'front') ──
+  // ── Label "LOADING DOCK" — di LUAR lantai abu (bukan mepet rak lagi) ──
   var dockLabel = _p3dMakeLabelSprite('🚚 LOADING DOCK', {
     canvasW: 420, canvasH: 110, fontPx: 42, scale: [11, 3, 1]
   });
-  dockLabel.position.set(-floorPad + 1, 6, globalMaxZ/2);
+  dockLabel.position.set(-floorPad - 3, 6, globalMaxZ/2);
   labelsGroup.add(dockLabel);
 
   var LOKAL_COLORS = [0xff0000,0xf7ff00,0x19e619,0x3b82f6,0xf97316,0xefefef];
@@ -7093,6 +7115,24 @@ function _p3dBuildRotateScene() {
     }
     var zDepanLine = isSecondOfPair ? wz1 : wz0;
     var zBelakangLine = isSecondOfPair ? wz0 : wz1;
+
+    // ── Bin tambahan (T1-T8, "DEPAN BLOK A-H") — ditaruh di LUAR jalur pejalan kaki,
+    // jalurnya sendiri yang jadi jarak/pemisah antara bin tambahan dgn rak asli ──
+    var T_BIN_LETTER_IDX = {A:1,B:2,C:3,D:4,E:5,F:6,G:7,H:8};
+    if (T_BIN_LETTER_IDX[letter]) {
+      var tBinDepth = 1.4;
+      var tZ = isSecondOfPair ? (wz1 + walkW/2 + tBinDepth/2) : (wz0 - walkW/2 - tBinDepth/2);
+      var tBinW = nxRack;
+      var tBinMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(tBinW, 1.1, tBinDepth),
+        new THREE.MeshStandardMaterial({ color: 0x92703a, roughness: 0.75 })
+      );
+      tBinMesh.position.set(nxRack/2 + iShiftW, 0.55, tZ);
+      framesGroup.add(tBinMesh);
+      var tLabel = _p3dMakeLabelSprite('T' + T_BIN_LETTER_IDX[letter], { canvasW: 110, canvasH: 56, fontPx: 26, scale: [2.2, 1.1, 1], bg: 'rgba(120,80,30,0.85)', border: 'rgba(255,255,255,0.6)' });
+      tLabel.position.set(nxRack/2 + iShiftW, 1.6, tZ);
+      labelsGroup.add(tLabel);
+    }
     var bp = [];
     if (letter === 'I') {
       if (skip.indexOf('depan') === -1) {
@@ -7144,8 +7184,35 @@ function _p3dBuildRotateScene() {
   addKiriKanan(['D','E'], false, false);
   addKiriKanan(['F','G'], false, true);
   addKiriKanan(['F'], true, false);
+  addKiriKanan(['G'], true, false);
   addKiriKanan(['H'], false, true);
   addKiriKanan(['I'], true, true);
+
+  // ── Sambungan pejalan kaki tambahan — biar gak keputus antar blok ──
+  // Sisi "row25" (kanan B-F): nyambung terus dari A sampai ujung H, satu garis lurus.
+  var spineX25 = 25;
+  var spineZ0 = rackMeta['A'].start - walkW;
+  var spineZ1H = rackMeta['H'].start + maxDepth('H') + walkW;
+  addWalkStrip(spineX25, (spineZ0+spineZ1H)/2, walkW, spineZ1H-spineZ0);
+  var spine25Pts = [
+    spineX25-walkW/2,0.01,spineZ0, spineX25-walkW/2,0.01,spineZ1H,
+    spineX25+walkW/2,0.01,spineZ0, spineX25+walkW/2,0.01,spineZ1H
+  ];
+  var spine25Geo = new THREE.BufferGeometry();
+  spine25Geo.setAttribute('position', new THREE.Float32BufferAttribute(spine25Pts, 3));
+  floorGroup.add(new THREE.LineSegments(spine25Geo, walkBorderMat));
+
+  // Sisi "row1" (kiri, X≈0): nyambung dari A terus sampai I (I26 udah disejajarkan ke H35 lewat shift +9).
+  var spineX1 = 0;
+  var spineZ1I = rackMeta['I'].start + maxDepth('I') + walkW;
+  addWalkStrip(spineX1, (spineZ0+spineZ1I)/2, walkW, spineZ1I-spineZ0);
+  var spine1Pts = [
+    spineX1-walkW/2,0.01,spineZ0, spineX1-walkW/2,0.01,spineZ1I,
+    spineX1+walkW/2,0.01,spineZ0, spineX1+walkW/2,0.01,spineZ1I
+  ];
+  var spine1Geo = new THREE.BufferGeometry();
+  spine1Geo.setAttribute('position', new THREE.Float32BufferAttribute(spine1Pts, 3));
+  floorGroup.add(new THREE.LineSegments(spine1Geo, walkBorderMat));
 
   var gSeg1 = groups.filter(function(x){return x.bin==='G' && x.rowTo===25;})[0];
   var gSeg2 = groups.filter(function(x){return x.bin==='G' && x.rowFrom===26;})[0];
@@ -7164,6 +7231,69 @@ function _p3dBuildRotateScene() {
     var gLg = new THREE.BufferGeometry();
     gLg.setAttribute('position', new THREE.Float32BufferAttribute(gBp, 3));
     floorGroup.add(new THREE.LineSegments(gLg, walkBorderMat));
+  }
+
+  // ── Bin tambahan T9-T36 — posisi BEST-EFFORT dari nama (bukan koordinat pasti,
+  // belum ada data XYZ persis buat ini). Dikelompokkan berdasar clue nama masing-masing. ──
+  function _p3dAddTBin(label, cx, cz, w, d, capText) {
+    var tMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(w, 1.0, d),
+      new THREE.MeshStandardMaterial({ color: 0xb08968, roughness: 0.8, transparent:true, opacity:0.85 })
+    );
+    tMesh.position.set(cx, 0.5, cz);
+    framesGroup.add(tMesh);
+    var lbl = _p3dMakeLabelSprite(label, { canvasW: 100, canvasH: 50, fontPx: 22, scale: [1.8, 0.9, 1], bg: 'rgba(120,80,30,0.85)', border: 'rgba(255,255,255,0.6)' });
+    lbl.position.set(cx, 1.3, cz);
+    labelsGroup.add(lbl);
+  }
+
+  // T9-T15: KERANGKENG 1-7 (cap 5) — dijejer di gang lebar setelah G (sebelum H)
+  if (rackMeta['G'] && rackMeta['H']) {
+    var kerZ = (rackMeta['G'].start + maxDepth('G') + rackMeta['H'].start) / 2;
+    for (var ki = 0; ki < 7; ki++) {
+      _p3dAddTBin('T' + (9+ki), 3 + ki*3.2, kerZ, 2.6, 1.2, '5');
+    }
+  }
+  // T16: SAMPING BLOK G (cap 3) — di samping kanan G (row angka besar)
+  if (rackMeta['G']) {
+    var gWidth = (function(){ var s=groups.filter(function(g){return g.bin==='G';}); var o=Math.min.apply(null,s.map(function(x){return x.rowFrom;})); return Math.max.apply(null,s.map(function(x){return x.rowTo-o+1;})) + (s.length-1)*3; })();
+    _p3dAddTBin('T16', gWidth + 2, rackMeta['G'].start + maxDepth('G')/2, 1.2, maxDepth('G'), '3');
+  }
+  // T17-19: DEPAN KERANGKENG G-F / D-E / B-C (cap 3) — di gang sempit (BACK_GAP) antar pasangan blok
+  var kerangkengPairs = [['F','G','T17'], ['D','E','T18'], ['B','C','T19']];
+  kerangkengPairs.forEach(function(pair) {
+    var l1 = pair[0], l2 = pair[1], lbl = pair[2];
+    if (rackMeta[l1] && rackMeta[l2]) {
+      var gapZ = (rackMeta[l1].start + maxDepth(l1) + rackMeta[l2].start) / 2;
+      _p3dAddTBin(lbl, 12, gapZ, 3, 1.0, '3');
+    }
+  });
+  // T20-22: DEPAN ROLLING DOOR D-E / F-G / B-C (cap 3) — sisi row1 (X≈0) dari gang yang sama
+  var rollingDoorPairs = [['D','E','T20'], ['F','G','T21'], ['B','C','T22']];
+  rollingDoorPairs.forEach(function(pair) {
+    var l1 = pair[0], l2 = pair[1], lbl = pair[2];
+    if (rackMeta[l1] && rackMeta[l2]) {
+      var gapZ2 = (rackMeta[l1].start + maxDepth(l1) + rackMeta[l2].start) / 2;
+      _p3dAddTBin(lbl, -3, gapZ2, 2, 1.0, '3');
+    }
+  });
+  // T23-T31: HABIS LORONG BLOK I 1-9 (cap 5) — dijejer sepanjang lorong di sisi I (X lebih besar dari I)
+  if (rackMeta['I']) {
+    var iMaxX = (function(){ var s=groups.filter(function(g){return g.bin==='I';}); var o=Math.min.apply(null,s.map(function(x){return x.rowFrom;})); return Math.max.apply(null,s.map(function(x){return x.rowTo-o+1;})) + 9; })();
+    var iZ0 = rackMeta['I'].start, iZ1 = rackMeta['I'].start + maxDepth('I');
+    for (var hi = 0; hi < 9; hi++) {
+      var hz = iZ0 + (iZ1-iZ0) * (hi+0.5)/9;
+      _p3dAddTBin('T'+(23+hi), iMaxX + 2.5, hz, 1.6, 1.0, '5');
+    }
+  }
+  // T32-T36: KERANGKENG BLOK I 1-5 (cap 4) — dijejer lanjutan setelah lorong I, agak lebih jauh
+  if (rackMeta['I']) {
+    var iMaxX2 = (function(){ var s=groups.filter(function(g){return g.bin==='I';}); var o=Math.min.apply(null,s.map(function(x){return x.rowFrom;})); return Math.max.apply(null,s.map(function(x){return x.rowTo-o+1;})) + 9; })();
+    var iZ0b = rackMeta['I'].start, iZ1b = rackMeta['I'].start + maxDepth('I');
+    for (var ii = 0; ii < 5; ii++) {
+      var iz = iZ0b + (iZ1b-iZ0b) * (ii+0.5)/5;
+      _p3dAddTBin('T'+(32+ii), iMaxX2 + 5, iz, 1.4, 1.0, '4');
+    }
   }
 
   if (_p3dControls) _p3dControls.target.set(globalMaxX/2, 0, globalMaxZ/2);
