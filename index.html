@@ -6804,7 +6804,7 @@ function _p3dBuildRotateScene() {
     var s = groups.filter(function(g){return g.bin===l;});
     var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
     var nxRaw = Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;}));
-    var extra = (l === 'G' ? (s.length-1)*3 : 0) + (l === 'I' ? 7 : 0);
+    var extra = (l === 'G' ? (s.length-1)*3 : 0) + (l === 'I' ? 9 : 0);
     return nxRaw + extra;
   }));
 
@@ -6850,7 +6850,7 @@ function _p3dBuildRotateScene() {
     var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
     var nxRack = Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;})) + (letter==='G' ? (s.length-1)*3 : 0);
     var m = rackMeta[letter];
-    var iShiftW = (letter === 'I') ? 7 : 0;
+    var iShiftW = (letter === 'I') ? 9 : 0;
     var wx0 = -walkW + iShiftW, wx1 = nxRack + walkW + iShiftW;
     var wz0 = m.start - walkW, wz1 = m.start + m.depth + walkW;
     var skip = WALK_SKIP[letter] || [];
@@ -6971,7 +6971,7 @@ function _p3dBuildRotateScene() {
     }
 
     positions.forEach(function(p) {
-      var iShift = (letter === 'I') ? 7 : 0;
+      var iShift = (letter === 'I') ? 9 : 0;
       var finalX = p.sx + iShift;
       var seg = p.seg;
       var ny = seg.depth, nz = seg.level;
@@ -7006,7 +7006,7 @@ function _p3dBuildRotateScene() {
       if (!seg) continue;
       if (letter === 'G' && prevSeg && prevSeg !== seg) xGapOffset += SEG_GAP;
       prevSeg = seg;
-      var iShift = (letter === 'I') ? 7 : 0;
+      var iShift = (letter === 'I') ? 9 : 0;
       var finalX = xi + xGapOffset + iShift;
       var ny = seg.depth, nz = seg.level;
       var iBackAlign = (letter === 'I' && seg.rowFrom >= 28);
@@ -7068,7 +7068,7 @@ function _p3dBuildRotateScene() {
       posB.push({ sx: xi2 + xGapOffsetB, depth: seg2.depth, zBaseEff: zBaseEffB });
     }
     posB.forEach(function(p) {
-      var iShiftB = (letter === 'I') ? 7 : 0;
+      var iShiftB = (letter === 'I') ? 9 : 0;
       var fx = p.sx + iShiftB;
       for (var lvl2=0; lvl2<=lvls; lvl2++) {
         beamInstances.push({ x:fx,   y:lvl2, z:p.zBaseEff+p.depth/2, depth:p.depth });
@@ -7107,7 +7107,7 @@ function _p3dBuildRotateScene() {
       posB.push({ sx: xi2 + xGapOffsetB, depth: seg2.depth, zBaseEff: zBaseEffB });
     }
     posB.forEach(function(p) {
-      var iShiftB = (letter === 'I') ? 7 : 0;
+      var iShiftB = (letter === 'I') ? 9 : 0;
       var fx = p.sx + iShiftB;
       for (var lvl2=0; lvl2<lvls; lvl2++) {
         for (var d=2; d<=p.depth; d+=2) {
