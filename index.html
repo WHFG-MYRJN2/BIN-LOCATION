@@ -10,7 +10,7 @@
 }
 </script>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="BinLoc">
@@ -91,7 +91,7 @@ input:focus, select:focus {
 
 /* ── HEADER ── */
 .app-header {
-  padding: 16px 20px 12px;
+  padding: calc(16px + env(safe-area-inset-top)) 20px 12px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1067,6 +1067,7 @@ input:focus, select:focus {
           autocomplete="off" autocorrect="off" spellcheck="false"
           oninput="onBinInputChange()"
           onkeydown="if(event.key==='Enter') confirmBinInput()">
+        <div id="bin-loc-suggest" style="display:none;margin-top:8px;max-height:240px;overflow-y:auto;border:1.5px solid var(--border);border-radius:12px;background:var(--surface);text-align:left;"></div>
         <div id="bin-loc-warn" style="display:none;font-size:11px;color:var(--accent2);margin-top:4px">
           ⚠️ Kode bin harus mengandung huruf (contoh: A1, B-03)
         </div>
@@ -2035,6 +2036,8 @@ function setBinMode(mode) {
   document.getElementById('bin-loc-input').value  = '';
   document.getElementById('bin-loc-custom').value = '';
   document.getElementById('bin-loc-warn').style.display = 'none';
+  var suggestBox = document.getElementById('bin-loc-suggest');
+  if (suggestBox) { suggestBox.style.display = 'none'; suggestBox.innerHTML = ''; }
   var icon = mode==='lainlain' ? '📍' : '📦';
   var sub  = mode==='lainlain' ? 'Pilih lokasi atau tambah baru' : 'Ketik kode bin dari label racking';
   document.getElementById('bin-screen-icon').textContent = icon;
@@ -2200,6 +2203,37 @@ function onBinInputChange() {
     warnEl.style.display = 'none';
     btnEl.disabled = val.length === 0;
   }
+  updateBinSuggestions(val);
+}
+
+var _rackingBinCodesCache = null;
+function _allRackingBinCodes() {
+  if (!_rackingBinCodesCache) _rackingBinCodesCache = PETA2D_CELLS.map(function(c){ return c.bin; });
+  return _rackingBinCodesCache;
+}
+
+function updateBinSuggestions(val) {
+  var box = document.getElementById('bin-loc-suggest');
+  if (!box) return;
+  var norm = val.toUpperCase().replace(/[-.\s]/g, '');
+  if (!norm) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  var matches = _allRackingBinCodes().filter(function(b) { return b.indexOf(norm) === 0; }).slice(0, 8);
+  if (!matches.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.innerHTML = matches.map(function(b, i) {
+    return '<div onmousedown="event.preventDefault();selectBinSuggestion(\'' + b + '\')" '
+      + 'style="padding:12px 16px;font-size:15px;font-weight:800;font-family:var(--mono);cursor:pointer;'
+      + (i < matches.length - 1 ? 'border-bottom:1px solid var(--border);' : '') + '">' + b + '</div>';
+  }).join('');
+  box.style.display = 'block';
+}
+
+function selectBinSuggestion(code) {
+  document.getElementById('bin-loc-input').value = code;
+  document.getElementById('bin-loc-warn').style.display = 'none';
+  document.getElementById('bin-confirm-btn').disabled = false;
+  var box = document.getElementById('bin-loc-suggest');
+  box.style.display = 'none';
+  box.innerHTML = '';
 }
 
 function onBinCustomChange() {
