@@ -1294,7 +1294,7 @@ input:focus, select:focus {
       <div id="peta-3d-rotate-wrap" style="display:none;position:relative;height:60vh;touch-action:none;">
         <canvas id="peta3dRotateCanvas" style="display:block;width:100%;height:100%;"></canvas>
         <div id="peta3dRotateError" style="display:none;margin:14px;padding:14px;background:#7f1d1d;border-radius:10px;font-size:11px;color:#fecaca;white-space:pre-wrap;position:absolute;top:0;left:0;right:0;"></div>
-        <div id="peta3d-viewcube" style="position:absolute;top:8px;right:8px;display:grid;grid-template-columns:repeat(3,26px);grid-template-rows:repeat(3,26px);gap:2px;z-index:5;background:rgba(255,255,255,.55);padding:4px;border-radius:10px;backdrop-filter:blur(2px);">
+        <div id="peta3d-viewcube" style="position:absolute;top:8px;right:8px;display:grid;grid-template-columns:repeat(3,26px) 22px;grid-template-rows:repeat(3,26px);gap:2px;z-index:5;background:rgba(255,255,255,.55);padding:4px;border-radius:10px;backdrop-filter:blur(2px);">
           <div></div>
           <button onclick="if(window.peta3DSetPresetView)peta3DSetPresetView('top')" style="grid-column:2;grid-row:1;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--muted);font-size:9px;font-weight:800;cursor:pointer;">TOP</button>
           <div></div>
@@ -1304,6 +1304,7 @@ input:focus, select:focus {
           <button onclick="if(window.peta3DSetPresetView)peta3DSetPresetView('front')" style="grid-column:1;grid-row:3;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--muted);font-size:8px;font-weight:800;cursor:pointer;">FRONT</button>
           <button onclick="if(window.peta3DResetView)window.peta3DResetView()" style="grid-column:2;grid-row:3;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--muted);font-size:8px;font-weight:800;cursor:pointer;">RST</button>
           <button onclick="if(window.peta3DSetPresetView)peta3DSetPresetView('back')" style="grid-column:3;grid-row:3;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--muted);font-size:8px;font-weight:800;cursor:pointer;">BACK</button>
+          <button onclick="if(window.peta3DRotateIso)peta3DRotateIso()" title="Putar tampilan ISO 90°" style="grid-column:4;grid-row:1/4;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--muted);font-size:12px;font-weight:800;cursor:pointer;">↻</button>
         </div>
       </div>
       <div class="peta-scroll-wrap">
@@ -6840,8 +6841,7 @@ async function _p3dInitRotateView() {
     right:  { x: 0,      y: 0,     z: -1    }, // dulu 'back'
     iso:    { x: 1,      y: 0.85,  z: 1     }
   };
-  window.peta3DSetPresetView = function(view) {
-    var dir = _p3dPresetDirs[view];
+  function _p3dAnimateToDir(dir) {
     if (!dir || !_p3dCamera || !_p3dControls) return;
     var len = Math.sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
     var c = _p3dSceneCenter;
@@ -6854,6 +6854,23 @@ async function _p3dInitRotateView() {
       fromSph: _p3dToSpherical(fromOffset), toSph: _p3dToSpherical(toOffset),
       start: performance.now(), dur: 500
     };
+  }
+  window.peta3DSetPresetView = function(view) {
+    var dir = _p3dPresetDirs[view];
+    if (view === 'iso') _p3dIsoRotIndex = 0; // reset ke sudut iso pertama tiap masuk lewat tombol ISO
+    _p3dAnimateToDir(dir);
+  };
+  // ── Rotate ISO — klik berkali-kali muter 90° tiap klik (4 sudut corner, kaya AutoCAD) ──
+  var _p3dIsoRotIndex = 0;
+  var _p3dIsoDirs = [
+    { x: 1,  y: 0.85, z: 1  },
+    { x: 1,  y: 0.85, z: -1 },
+    { x: -1, y: 0.85, z: -1 },
+    { x: -1, y: 0.85, z: 1  }
+  ];
+  window.peta3DRotateIso = function() {
+    _p3dIsoRotIndex = (_p3dIsoRotIndex + 1) % 4;
+    _p3dAnimateToDir(_p3dIsoDirs[_p3dIsoRotIndex]);
   };
   var lastT = performance.now();
   function animate() {
