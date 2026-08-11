@@ -1,6 +1,14 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1256,9 +1264,24 @@ input:focus, select:focus {
           <button onclick="petaRefresh()" id="peta-refresh-btn" style="padding:5px 12px;border:1px solid #3b82f640;border-radius:8px;background:#3b82f615;color:#3b82f6;font-size:10px;font-weight:700;cursor:pointer">🔄 Refresh</button>
         </div>
       </div>
+      <div style="display:flex;gap:6px;padding:8px 2px 4px;">
+        <button id="peta2d-mode-aktual" onclick="petaToggle2DMode('aktual')" style="flex:1;padding:7px 10px;border-radius:8px;font-size:11px;font-weight:800;cursor:pointer;background:#9333ea;color:#fff;border:none;">📐 Aktual</button>
+        <button id="peta2d-mode-simple" onclick="petaToggle2DMode('simple')" style="flex:1;padding:7px 10px;border-radius:8px;font-size:11px;font-weight:800;cursor:pointer;background:var(--surface2);color:var(--muted);border:1px solid var(--border);">🗒️ Simple</button>
+      </div>
       <div id="peta-3d-rack-selector" style="display:none;padding:8px 2px 12px;">
         <div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;margin-bottom:6px;">Pilih Rak</div>
         <div id="peta-3d-rack-chips" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+      </div>
+      <div id="peta-3d-view-toggle" style="display:none;padding:0 2px 8px;gap:6px;flex-direction:column;">
+        <div style="display:flex;gap:6px;">
+          <button id="peta3d-view-aktual" onclick="peta3DSetViewMode('aktual')" style="flex:1;padding:7px 10px;border-radius:8px;font-size:11px;font-weight:800;cursor:pointer;background:#9333ea;color:#fff;border:none;">🧊 Aktual</button>
+          <button id="peta3d-view-rotate" onclick="peta3DSetViewMode('rotate')" style="flex:1;padding:7px 10px;border-radius:8px;font-size:11px;font-weight:800;cursor:pointer;background:var(--surface2);color:var(--muted);border:1px solid var(--border);">🔄 Rotate</button>
+        </div>
+        <button id="peta3d-reset-view-btn" onclick="if(window.peta3DResetView)window.peta3DResetView()" style="display:none;padding:7px 10px;border-radius:8px;font-size:11px;font-weight:800;cursor:pointer;background:#374151;color:#fff;border:none;">🏠 Reset View</button>
+      </div>
+      <div id="peta-3d-rotate-wrap" style="display:none;position:relative;height:60vh;touch-action:none;">
+        <canvas id="peta3dRotateCanvas" style="display:block;width:100%;height:100%;"></canvas>
+        <div id="peta3dRotateError" style="display:none;margin:14px;padding:14px;background:#7f1d1d;border-radius:10px;font-size:11px;color:#fecaca;white-space:pre-wrap;position:absolute;top:0;left:0;right:0;"></div>
       </div>
       <div class="peta-scroll-wrap">
         <div id="peta-map-wrap" class="peta-map-wrap">
@@ -3031,6 +3054,17 @@ function _petaFetchData() {
   );
 }
 
+var _peta2DMode = 'aktual'; // 'aktual' (grid+bin T) | 'simple' (tampilan lama sebelum ada bin T)
+
+function petaToggle2DMode(mode) {
+  _peta2DMode = mode;
+  document.getElementById('peta2d-mode-aktual').style.cssText = mode==='aktual'
+    ? 'background:#9333ea;color:#fff;' : 'background:var(--surface2);color:var(--muted);border:1px solid var(--border);';
+  document.getElementById('peta2d-mode-simple').style.cssText = mode==='simple'
+    ? 'background:#9333ea;color:#fff;' : 'background:var(--surface2);color:var(--muted);border:1px solid var(--border);';
+  petaRenderMap(_petaData || []);
+}
+
 function petaRenderMap(rawData) {
   // Kembalikan style default (max-content) — override 3D sebelumnya (kalau ada) tidak boleh nyangkut di 2D
   var wrapEl = document.getElementById('peta-map-wrap');
@@ -3046,7 +3080,12 @@ function petaRenderMap(rawData) {
     binMap[k].items.push(r);
   });
 
-  // ── Grid CSS, posisi PERSIS koordinat Excel asli (PETA2D_CELLS untuk A-I, PETA2D_TBINS untuk T) ──
+  if (_peta2DMode === 'simple') petaRenderMapSimple(rawData, binMap);
+  else petaRenderMapAktual(rawData, binMap);
+}
+
+// ── Versi AKTUAL — grid CSS posisi persis koordinat Excel + bin T (yang sekarang berjalan) ──
+function petaRenderMapAktual(rawData, binMap) {
   var minR = 4, maxR = 27, minC = 1, maxC = 48;
   var htmlParts = [];
 
@@ -3092,6 +3131,60 @@ function petaRenderMap(rawData) {
 
   // ── Lain-lain: fallback kalau ada binLoc yang genuinely tidak dikenal (bukan racking, bukan T) ──
   var llBins = Object.keys(binMap).filter(function(k){ return petaCapacity(k) === 0 && !T_BIN_NAMES[k]; });
+  var llEl   = document.getElementById('peta-lainlain');
+  if (llBins.length) {
+    llBins.sort();
+    var llHtml = '';
+    llBins.forEach(function(loc) {
+      var info  = binMap[loc];
+      var names = info.items.slice(0,2).map(function(i){ return i.skuNama||i.skuKode; }).join(', ')
+                + (info.items.length > 2 ? '…' : '');
+      llHtml += '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;cursor:pointer" onclick="petaShowPopup(\''+escHtml(loc)+'\')">'
+              + '<div style="font-size:12px;font-weight:800;color:#3b82f6">📍 '+escHtml(loc)+'</div>'
+              + '<div style="font-size:13px;font-weight:800;color:#2563eb;margin:2px 0">'+info.used+' plt efektif</div>'
+              + '<div style="font-size:10px;color:var(--muted)">'+info.items.length+' SKU · '+escHtml(names)+'</div>'
+              + '</div>';
+    });
+    llEl.innerHTML = '<div style="font-size:11px;font-weight:800;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">📍 Lain-lain ('+llBins.length+' lokasi)</div>'
+                   + '<div style="display:flex;flex-direction:column;gap:8px">'+llHtml+'</div>';
+    llEl.style.display = '';
+  } else {
+    llEl.style.display = 'none';
+  }
+}
+
+// ── Versi SIMPLE — tampilan LAMA sebelum ada bin T (baris per-rak, "Lain-lain" hasil
+// discovery dinamis dari data, bukan daftar tetap). Dikembalikan persis seperti dulu. ──
+function petaRenderMapSimple(rawData, binMap) {
+  var html = '<div class="peta-num-hdr">';
+  for (var n = 1; n <= PETA_MAX_COL; n++) {
+    html += '<span' + (n % 5 === 0 ? ' class="tick"' : '') + '>' + (n % 5 === 0 ? n : '') + '</span>';
+  }
+  html += '</div>';
+
+  PETA_MAP_ROWS.forEach(function(entry) {
+    if (!entry) { html += '<div class="peta-gap"></div>'; return; }
+    html += '<div class="peta-row-group">';
+    entry.rows.forEach(function(rowDef) {
+      html += '<div class="peta-row"><div class="peta-row-lbl">' + rowDef.l + '</div>';
+      for (var n = 1; n <= PETA_MAX_COL; n++) {
+        if (n > rowDef.max) { html += '<div class="peta-void"></div>'; continue; }
+        var bin  = rowDef.l + n;
+        var cap  = petaCapacity(bin);
+        var info = binMap[bin] || { used:0, items:[] };
+        var cls  = petaColorClass(info.used, cap);
+        var pct  = cap ? Math.round(info.used/cap*100) : 0;
+        html += '<div class="peta-cell ' + cls + (_opnameDoneBins[bin] ? ' opname-done' : '') + '" data-bin="' + bin + '" onclick="petaShowPopup(\'' + bin + '\')" title="' + bin + ' ' + pct + '%">' + n + '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+
+  document.getElementById('peta-map-wrap').innerHTML = html;
+
+  // ── Lain-lain: discovery dinamis (sesuai perilaku ASLI sebelum bin T ditambahkan) ──
+  var llBins = Object.keys(binMap).filter(function(k){ return petaCapacity(k) === 0; });
   var llEl   = document.getElementById('peta-lainlain');
   if (llBins.length) {
     llBins.sort();
@@ -3289,17 +3382,25 @@ function petaToggle3D() {
   _peta3DMode = !_peta3DMode;
   var btn = document.getElementById('peta-3d-toggle-btn');
   var selector = document.getElementById('peta-3d-rack-selector');
+  var mode2dToggle = document.getElementById('peta2d-mode-aktual');
+  var mode2dToggleWrap = mode2dToggle ? mode2dToggle.parentElement : null;
+  var viewToggle = document.getElementById('peta-3d-view-toggle');
   if (_peta3DMode) {
     btn.style.background = '#9333ea';
     btn.style.color = '#fff';
     btn.textContent = '📄 2D';
     selector.style.display = 'block';
+    if (mode2dToggleWrap) mode2dToggleWrap.style.display = 'none';
+    if (viewToggle) viewToggle.style.display = 'flex';
     _peta3DLoadGroups();
   } else {
     btn.style.background = '#9333ea15';
     btn.style.color = '#9333ea';
     btn.textContent = '🧊 3D';
     selector.style.display = 'none';
+    if (mode2dToggleWrap) mode2dToggleWrap.style.display = 'flex';
+    if (viewToggle) viewToggle.style.display = 'none';
+    peta3DSetViewMode('aktual'); // balik ke aktual biar canvas rotate ke-hide waktu keluar 3D
     _peta3DSelectedPosIdx = null;
     petaRenderMap(_petaData || []);
   }
@@ -3366,14 +3467,16 @@ function _peta3DAfterGroupsLoaded() {
   _peta3DGroups.forEach(function(g) { if (uniqueLetters.indexOf(g.bin) === -1) uniqueLetters.push(g.bin); });
 
   if (!_peta3DSelected) _peta3DSelected = 'ALL';
-  var allChips = ['ALL'].concat(uniqueLetters);
+  var allChips = ['ALL'].concat(uniqueLetters).concat(['T']);
   chipsEl.innerHTML = allChips.map(function(letter) {
     var sel = letter === _peta3DSelected;
+    var label = letter === 'T' ? '📦 Bin T' : letter;
     return '<div onclick="petaSelect3DRack(\'' + letter + '\')" style="padding:7px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:800;'
       + (sel ? 'background:#9333ea;color:#fff;' : 'background:var(--surface2);color:var(--muted);border:1px solid var(--border);')
-      + '">' + letter + '</div>';
+      + '">' + label + '</div>';
   }).join('');
   if (_peta3DSelected === 'ALL') petaRender3DAll(uniqueLetters);
+  else if (_peta3DSelected === 'T') petaRender3DTOnly();
   else petaRender3D(_peta3DSelected);
 }
 
@@ -3791,6 +3894,112 @@ function petaRender3DAll(allLetters) {
     + '<div style="background:#fff;border-radius:12px;padding:12px;width:100%;box-sizing:border-box;overflow-x:auto;">' + svgParts.join('') + '</div>';
 }
 
+// ── Tampilan KHUSUS Bin T saja — tanpa rak utama, tanpa rangka, tanpa barang rak.
+// Cuma nunjukin area non-racking (bin tambahan) biar kelihatan jelas semua yang di luar
+// rak utama. Tetap butuh hitung globalMaxY dari layout rak asli (buat posisi Y bin T tetap
+// konsisten), tapi rak-nya sendiri TIDAK digambar sama sekali.
+function petaRender3DTOnly() {
+  var LAYOUT_ORDER = ['A','B','C','D','E','F','G','H','I'];
+  var MIRRORED = ['B','D','F','H','I'];
+  var AISLE_GAP = 5, BACK_GAP = 1.2;
+  var GAP_AFTER = { 'A':'aisle', 'B':'back', 'C':'aisle', 'D':'back', 'E':'aisle', 'F':'back', 'G':'aisle', 'H':'aisle' };
+
+  var wrap = document.getElementById('peta-map-wrap');
+  wrap.style.width = '100%'; wrap.style.minWidth = '0'; wrap.style.maxWidth = '100%'; wrap.style.margin = '0 auto';
+
+  function maxDepthOfRack(letter) {
+    var segs = _peta3DGroups.filter(function(g){ return g.bin === letter; });
+    if (!segs.length) return 0;
+    return Math.max.apply(null, segs.map(function(s){ return s.depth; }));
+  }
+  var rackMeta = {};
+  var cursor = 0;
+  LAYOUT_ORDER.forEach(function(letter, idx) {
+    var depth = maxDepthOfRack(letter);
+    if (idx > 0) {
+      var gapType = GAP_AFTER[LAYOUT_ORDER[idx-1]] || 'aisle';
+      cursor += (gapType === 'aisle') ? AISLE_GAP : BACK_GAP;
+    }
+    var yStart = cursor, yEnd = cursor + depth;
+    rackMeta[letter] = { yStart: yStart, yEnd: yEnd, depth: depth };
+    cursor = yEnd;
+  });
+  var globalMaxY = cursor;
+
+  var binMap = {};
+  (_petaData || []).forEach(function(r) {
+    if (!binMap[r.binLoc]) binMap[r.binLoc] = { used: 0, items: [] };
+    var pecList = (r.pecahan_list && r.pecahan_list.length > 0) ? r.pecahan_list : ((r.pecahan||0) > 0 ? [r.pecahan] : []);
+    binMap[r.binLoc].used += (r.pallet || 0) + pecList.length;
+    binMap[r.binLoc].items.push(r);
+  });
+
+  // Bounding box cukup dari BORDER_POINTS saja (tidak perlu globalMaxX rak, karena rak tidak digambar)
+  var borderRowMin = T_EXCEL_ROW_MIN, borderRowMax = T_EXCEL_ROW_MAX;
+  var bPts = BORDER_POINTS.map(function(p) {
+    var yProp = (p.y - borderRowMin) / (borderRowMax - borderRowMin);
+    return p3dIsoProject(p.x, yProp * globalMaxY, 0);
+  });
+  var minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+  bPts.forEach(function(p){ if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y; });
+  var pad = 60;
+  var w = maxX-minX+pad*2, h = maxY-minY+pad*2;
+  var svgParts = ['<svg viewBox="'+(minX-pad)+' '+(minY-pad)+' '+w+' '+h+'" style="display:block;width:100%;height:auto;">'];
+
+  // Lantai abu muda mengikuti bentuk border
+  var floorPts = bPts.map(function(p){ return p.x.toFixed(1)+','+p.y.toFixed(1); }).join(' ');
+  svgParts.push('<polygon points="'+floorPts+'" fill="#dde3ea" stroke="#94a3b8" stroke-width="1.5"/>');
+  var borderD = 'M' + bPts.map(function(p){ return p.x.toFixed(1)+','+p.y.toFixed(1); }).join(' L') + ' Z';
+  svgParts.push('<path d="'+borderD+'" fill="none" stroke="#0f766e" stroke-width="3.5" stroke-linejoin="round"/>');
+
+  // Bin T — area abu tua + kotak isi (kalau ada data asli), TANPA rak/rangka/barang rak sama sekali
+  var tCombined = [];
+  T_BIN_DATA.forEach(function(t) {
+    var yProp = (t.rowMid - T_EXCEL_ROW_MIN) / (T_EXCEL_ROW_MAX - T_EXCEL_ROW_MIN);
+    var yPos = yProp * globalMaxY;
+    var areaPts = [
+      p3dIsoProject(t.x, yPos, 0), p3dIsoProject(t.x+t.w, yPos, 0),
+      p3dIsoProject(t.x+t.w, yPos+t.thick, 0), p3dIsoProject(t.x, yPos+t.thick, 0)
+    ].map(function(p){ return p.x.toFixed(1)+','+p.y.toFixed(1); }).join(' ');
+    svgParts.push('<polygon points="'+areaPts+'" fill="#6b7280"/>');
+    var tCode = 'T' + t.num;
+    var tInfo = binMap[tCode];
+    if (!tInfo || !tInfo.items || !tInfo.items.length) return;
+    var alongX = t.w >= t.thick;
+    var maxFit = Math.max(1, Math.floor(alongX ? t.w : t.thick));
+    var slotPtr = 0;
+    tInfo.items.forEach(function(item) {
+      var pecList = (item.pecahan_list && item.pecahan_list.length > 0) ? item.pecahan_list : ((item.pecahan||0) > 0 ? [item.pecahan] : []);
+      var units = (item.pallet || 0) + pecList.length;
+      var col = p3dColorForItem(item);
+      for (var u = 0; u < units && slotPtr < maxFit; u++, slotPtr++) {
+        if (alongX) tCombined.push({ x:t.x+slotPtr, y:yPos, color:col });
+        else tCombined.push({ x:t.x, y:yPos+slotPtr, color:col });
+      }
+    });
+  });
+  tCombined.sort(function(a,b){ return (a.x+a.y) - (b.x+b.y); });
+  tCombined.forEach(function(item) {
+    var r = p3dCubePolygons(item.x, item.y, 0, p3dColorInfo(item.color), { top:true, faceX:true, faceY:true });
+    r.faces.forEach(function(f) {
+      svgParts.push('<polygon points="'+f.pts+'" fill="'+f.fill+'" fill-opacity="'+f.op+'" stroke="#000" stroke-opacity="1" stroke-width="0.5"/>');
+    });
+    r.cartonPolys.forEach(function(cp){ svgParts.push('<polygon points="'+cp.pts+'" fill="'+cp.fill+'"/>'); });
+    r.cartonLines.forEach(function(cl){ svgParts.push('<line x1="'+cl.p1.x.toFixed(1)+'" y1="'+cl.p1.y.toFixed(1)+'" x2="'+cl.p2.x.toFixed(1)+'" y2="'+cl.p2.y.toFixed(1)+'" stroke="#000" stroke-width="0.5"/>'); });
+  });
+
+  // Label nama tiap bin T
+  T_BIN_DATA.forEach(function(t) {
+    var yProp = (t.rowMid - T_EXCEL_ROW_MIN) / (T_EXCEL_ROW_MAX - T_EXCEL_ROW_MIN);
+    var yPos = yProp * globalMaxY;
+    var lp = p3dIsoProject(t.x + t.w/2, yPos + 0.45, 0.25);
+    svgParts.push('<text x="'+lp.x.toFixed(1)+'" y="'+lp.y.toFixed(1)+'" font-size="7" font-weight="800" fill="#334155" text-anchor="middle" font-family="monospace">T'+t.num+'</text>');
+  });
+
+  svgParts.push('</svg>');
+  wrap.innerHTML = '<div style="padding:6px 4px 10px;font-size:10px;color:var(--muted);">📦 Bin Tambahan saja — rak utama disembunyikan, cuma nunjukin area di luar rak utama</div>'
+    + '<div style="background:#fff;border-radius:12px;padding:12px;width:100%;box-sizing:border-box;overflow-x:auto;">' + svgParts.join('') + '</div>';
+}
 
 function petaRender3D(binLetter) {
   var segments = (_peta3DGroups || []).filter(function(g) { return g.bin === binLetter; });
@@ -6459,5 +6668,511 @@ window.addEventListener('load', function() {
     </div>
   </div>
 </div>
+<script type="module">
+(function() {
+var _p3dScene, _p3dCamera, _p3dRenderer, _p3dControls, _p3dInitDone = false;
+var _p3dInitialCamPos, _p3dInitialTarget;
+var _p3dTHREE, _p3dOrbitControls;
+
+window.peta3DSetViewMode = function(mode) {
+  var btnA = document.getElementById('peta3d-view-aktual');
+  var btnR = document.getElementById('peta3d-view-rotate');
+  var resetBtn = document.getElementById('peta3d-reset-view-btn');
+  var mapWrap = document.querySelector('.peta-scroll-wrap');
+  var rotateWrap = document.getElementById('peta-3d-rotate-wrap');
+  if (mode === 'rotate') {
+    btnR.style.background = '#9333ea'; btnR.style.color = '#fff';
+    btnA.style.background = 'var(--surface2)'; btnA.style.color = 'var(--muted)';
+    if (mapWrap) mapWrap.style.display = 'none';
+    if (rotateWrap) rotateWrap.style.display = 'block';
+    if (resetBtn) resetBtn.style.display = 'block';
+    _p3dInitRotateView();
+  } else {
+    btnA.style.background = '#9333ea'; btnA.style.color = '#fff';
+    btnR.style.background = 'var(--surface2)'; btnR.style.color = 'var(--muted)';
+    if (mapWrap) mapWrap.style.display = '';
+    if (rotateWrap) rotateWrap.style.display = 'none';
+    if (resetBtn) resetBtn.style.display = 'none';
+  }
+};
+
+async function _p3dInitRotateView() {
+  if (_p3dInitDone) { _p3dBuildRotateScene(); return; }
+  var canvas = document.getElementById('peta3dRotateCanvas');
+  var errBox = document.getElementById('peta3dRotateError');
+  try {
+    _p3dTHREE = await import('three');
+    var mod = await import('three/addons/controls/OrbitControls.js');
+    _p3dOrbitControls = mod.OrbitControls;
+  } catch (err) {
+    errBox.style.display = 'block';
+    errBox.textContent = '❌ Gagal load Three.js dari CDN (unpkg.com):\n\n' + err.message
+      + '\n\nKemungkinan koneksi/browser memblokir unpkg.com, atau tidak dukung ES Modules.';
+    return;
+  }
+  var THREE = _p3dTHREE;
+  _p3dScene = new THREE.Scene();
+  _p3dScene.background = new THREE.Color(0xf3f4f6);
+  _p3dCamera = new THREE.OrthographicCamera(-1,1,1,-1,1,5000);
+  _p3dRenderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+  _p3dRenderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  function resize() {
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    _p3dRenderer.setSize(w, h, false);
+    var aspect = w/h, viewSize = 32;
+    _p3dCamera.left = -viewSize*aspect; _p3dCamera.right = viewSize*aspect;
+    _p3dCamera.top = viewSize; _p3dCamera.bottom = -viewSize;
+    _p3dCamera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  _p3dCamera.position.set(50,45,70);
+  _p3dControls = new _p3dOrbitControls(_p3dCamera, _p3dRenderer.domElement);
+  _p3dControls.target.set(20,0,15);
+  _p3dControls.enableDamping = true;
+  _p3dControls.minPolarAngle = 0.05;
+  _p3dControls.maxPolarAngle = Math.PI * 0.495;
+  _p3dScene.add(new THREE.AmbientLight(0xffffff, 0.8));
+  var dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
+  dirLight.position.set(30,50,20);
+  _p3dScene.add(dirLight);
+  resize();
+  _p3dBuildRotateScene();
+  _p3dInitDone = true;
+  _p3dInitialCamPos = _p3dCamera.position.clone();
+  _p3dInitialTarget = _p3dControls.target.clone();
+  window.peta3DResetView = function() {
+    _p3dCamera.position.copy(_p3dInitialCamPos);
+    _p3dControls.target.copy(_p3dInitialTarget);
+    _p3dControls.update();
+  };
+  var lastT = performance.now();
+  function animate() {
+    requestAnimationFrame(animate);
+    if (_p3dControls) _p3dControls.update();
+    if (_p3dRenderer && _p3dScene && _p3dCamera) _p3dRenderer.render(_p3dScene, _p3dCamera);
+  }
+  animate();
+}
+
+function _p3dBuildRotateScene() {
+  var THREE = _p3dTHREE;
+  if (!THREE || !_p3dScene) return;
+  while (_p3dScene.children.length) {
+    var c = _p3dScene.children[0];
+    _p3dScene.remove(c);
+  }
+  _p3dScene.add(new THREE.AmbientLight(0xffffff, 0.8));
+  var dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
+  dirLight.position.set(30,50,20);
+  _p3dScene.add(dirLight);
+
+  var groups = (_peta3DGroups || []).map(function(g){ return { bin:g.bin, rowFrom:g.rowFrom, rowTo:g.rowTo, level:g.level, depth:g.depth }; });
+  if (!groups.length) return;
+
+  var LAYOUT_ORDER = ['A','B','C','D','E','F','G','H','I'].filter(function(l){ return groups.some(function(g){return g.bin===l;}); });
+  var MIRRORED = ['B','D','F','H','I'];
+  var GAP_AFTER = { A:'aisle',B:'back',C:'aisle',D:'back',E:'aisle',F:'back',G:'aisle',H:'aisle' };
+  var AISLE_GAP = 5, BACK_GAP = 1.2;
+
+  function maxDepth(l){ var s=groups.filter(function(g){return g.bin===l;}); return s.length?Math.max.apply(null,s.map(function(x){return x.depth;})):0; }
+  function maxLevel(l){ var s=groups.filter(function(g){return g.bin===l;}); return s.length?Math.max.apply(null,s.map(function(x){return x.level;})):0; }
+
+  var boxesGroup = new THREE.Group(); var framesGroup = new THREE.Group(); var floorGroup = new THREE.Group();
+  _p3dScene.add(boxesGroup, framesGroup, floorGroup);
+
+  var rackMeta = {}, cursor = 0;
+  LAYOUT_ORDER.forEach(function(l, idx) {
+    var depth = maxDepth(l);
+    if (idx>0) { var g = GAP_AFTER[LAYOUT_ORDER[idx-1]]||'aisle'; cursor += g==='aisle'?AISLE_GAP:BACK_GAP; }
+    rackMeta[l] = { start: cursor, depth: depth };
+    cursor += depth;
+  });
+  var globalMaxZ = cursor;
+  var globalMaxX = Math.max.apply(null, LAYOUT_ORDER.map(function(l) {
+    var s = groups.filter(function(g){return g.bin===l;});
+    var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
+    var nxRaw = Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;}));
+    var extra = (l === 'G' ? (s.length-1)*3 : 0) + (l === 'I' ? 7 : 0);
+    return nxRaw + extra;
+  }));
+
+  var floorPad = 3;
+  var floorW = globalMaxX + floorPad*2, floorD = globalMaxZ + floorPad*2;
+  var floorGeo = new THREE.PlaneGeometry(floorW, floorD);
+  var floorMat = new THREE.MeshBasicMaterial({ color: 0xdde3ea, side: THREE.DoubleSide });
+  var floorMesh = new THREE.Mesh(floorGeo, floorMat);
+  floorMesh.rotation.x = -Math.PI/2;
+  floorMesh.position.set(globalMaxX/2, 0, globalMaxZ/2);
+  floorGroup.add(floorMesh);
+
+  var LOKAL_COLORS = [0xff0000,0xf7ff00,0x19e619,0x3b82f6,0xf97316,0xefefef];
+  var EKSPOR_COLOR = 0xddb96e;
+  var PALLET_COLOR = 0x946d1c;
+
+  var dummy = new THREE.Object3D();
+  var mtx = new THREE.Matrix4();
+  var identityQuat = new THREE.Quaternion();
+  var totalBoxes = 0;
+  var boxData = [];
+  var postData = [];
+
+  var walkMat = new THREE.MeshBasicMaterial({ color: 0x127453, side: THREE.DoubleSide });
+  var walkBorderMat = new THREE.LineBasicMaterial({ color: 0xfacc15 });
+  var walkW = 0.6;
+  function addWalkStrip(cx, cz, w, d) {
+    var g = new THREE.PlaneGeometry(w, d);
+    var mesh = new THREE.Mesh(g, walkMat);
+    mesh.rotation.x = -Math.PI/2;
+    mesh.position.set(cx, 0.005, cz);
+    floorGroup.add(mesh);
+  }
+  var WALK_SKIP = {
+    A: ['belakang','kanan'],
+    B: ['belakang'], C: ['belakang'], D: ['belakang'], E: ['belakang'], F: ['belakang'],
+    G: ['belakang','kanan'],
+    H: ['belakang','kanan'],
+    I: ['belakang','kanan','kiri']
+  };
+  LAYOUT_ORDER.forEach(function(letter) {
+    var s = groups.filter(function(g){return g.bin===letter;});
+    var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
+    var nxRack = Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;})) + (letter==='G' ? (s.length-1)*3 : 0);
+    var m = rackMeta[letter];
+    var iShiftW = (letter === 'I') ? 7 : 0;
+    var wx0 = -walkW + iShiftW, wx1 = nxRack + walkW + iShiftW;
+    var wz0 = m.start - walkW, wz1 = m.start + m.depth + walkW;
+    var skip = WALK_SKIP[letter] || [];
+    var isSecondOfPair = (letter==='A' || letter==='C' || letter==='E' || letter==='G');
+    var depanZ = isSecondOfPair ? (wz1-walkW/2) : (wz0+walkW/2);
+    var belakangZ = isSecondOfPair ? (wz0+walkW/2) : (wz1-walkW/2);
+    var iX1, iX2, iX3;
+    if (letter === 'I') {
+      iX1 = -walkW; iX2 = 31 + iShiftW; iX3 = 43 + walkW + iShiftW;
+      var frontZ1 = m.start - walkW/2;
+      var frontZ2 = m.start + 2 - walkW/2;
+      if (skip.indexOf('depan') === -1) {
+        addWalkStrip((iX1+iX2)/2, frontZ1, iX2-iX1, walkW);
+        addWalkStrip((iX2+iX3)/2, frontZ2, iX3-iX2, walkW);
+      }
+      if (skip.indexOf('belakang') === -1) addWalkStrip((wx0+wx1)/2, belakangZ, wx1-wx0, walkW);
+    } else {
+      if (skip.indexOf('depan') === -1) addWalkStrip((wx0+wx1)/2, depanZ, wx1-wx0, walkW);
+      if (skip.indexOf('belakang') === -1) addWalkStrip((wx0+wx1)/2, belakangZ, wx1-wx0, walkW);
+    }
+    var zDepanLine = isSecondOfPair ? wz1 : wz0;
+    var zBelakangLine = isSecondOfPair ? wz0 : wz1;
+    var bp = [];
+    if (letter === 'I') {
+      if (skip.indexOf('depan') === -1) {
+        bp.push(iX1,0.01,m.start,   iX2,0.01,m.start);
+        bp.push(iX2,0.01,m.start,   iX2,0.01,m.start+2);
+        bp.push(iX2,0.01,m.start+2, iX3,0.01,m.start+2);
+      }
+      if (skip.indexOf('belakang') === -1) bp.push(wx0,0.01,zBelakangLine, wx1,0.01,zBelakangLine);
+    } else {
+      if (skip.indexOf('depan') === -1)    bp.push(wx0,0.01,zDepanLine,    wx1,0.01,zDepanLine);
+      if (skip.indexOf('belakang') === -1) bp.push(wx0,0.01,zBelakangLine, wx1,0.01,zBelakangLine);
+    }
+    if (bp.length) {
+      var gL = new THREE.BufferGeometry();
+      gL.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3));
+      floorGroup.add(new THREE.LineSegments(gL, walkBorderMat));
+    }
+  });
+
+  function nxOf(letter) {
+    var s = groups.filter(function(g){return g.bin===letter;});
+    if (!s.length) return 0;
+    var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
+    return Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;})) + (letter==='G' ? (s.length-1)*3 : 0);
+  }
+  function addKiriKanan(letters, skipKiri, skipKanan) {
+    letters = letters.filter(function(l){ return rackMeta[l]; });
+    if (!letters.length) return;
+    var maxNx = Math.max.apply(null, letters.map(nxOf));
+    var zStart = rackMeta[letters[0]].start - walkW;
+    var lastM = rackMeta[letters[letters.length-1]];
+    var zEnd = lastM.start + lastM.depth + walkW;
+    var wx0 = -walkW, wx1 = maxNx + walkW;
+    if (!skipKiri) {
+      addWalkStrip(wx0+walkW/2, (zStart+zEnd)/2, walkW, zEnd-zStart);
+      var g1 = new THREE.BufferGeometry();
+      g1.setAttribute('position', new THREE.Float32BufferAttribute([wx0,0.01,zStart, wx0,0.01,zEnd], 3));
+      floorGroup.add(new THREE.LineSegments(g1, walkBorderMat));
+    }
+    if (!skipKanan) {
+      addWalkStrip(wx1-walkW/2, (zStart+zEnd)/2, walkW, zEnd-zStart);
+      var g2 = new THREE.BufferGeometry();
+      g2.setAttribute('position', new THREE.Float32BufferAttribute([wx1,0.01,zStart, wx1,0.01,zEnd], 3));
+      floorGroup.add(new THREE.LineSegments(g2, walkBorderMat));
+    }
+  }
+  addKiriKanan(['A'], false, true);
+  addKiriKanan(['B','C'], false, false);
+  addKiriKanan(['D','E'], false, false);
+  addKiriKanan(['F','G'], false, true);
+  addKiriKanan(['F'], true, false);
+  addKiriKanan(['H'], false, true);
+  addKiriKanan(['I'], true, true);
+
+  var gSeg1 = groups.filter(function(x){return x.bin==='G' && x.rowTo===25;})[0];
+  var gSeg2 = groups.filter(function(x){return x.bin==='G' && x.rowFrom===26;})[0];
+  if (gSeg1 && gSeg2 && rackMeta['G']) {
+    var gm = rackMeta['G'];
+    var gEdgeNear = 25 + walkW/2;
+    var gEdgeFar  = 25 + 3 - walkW/2;
+    addWalkStrip(gEdgeNear, gm.start+gm.depth/2, walkW, gm.depth);
+    addWalkStrip(gEdgeFar,  gm.start+gm.depth/2, walkW, gm.depth);
+    var gBp = [
+      gEdgeNear-walkW/2,0.01,gm.start, gEdgeNear-walkW/2,0.01,gm.start+gm.depth,
+      gEdgeNear+walkW/2,0.01,gm.start, gEdgeNear+walkW/2,0.01,gm.start+gm.depth,
+      gEdgeFar-walkW/2,0.01,gm.start,  gEdgeFar-walkW/2,0.01,gm.start+gm.depth,
+      gEdgeFar+walkW/2,0.01,gm.start,  gEdgeFar+walkW/2,0.01,gm.start+gm.depth
+    ];
+    var gLg = new THREE.BufferGeometry();
+    gLg.setAttribute('position', new THREE.Float32BufferAttribute(gBp, 3));
+    floorGroup.add(new THREE.LineSegments(gLg, walkBorderMat));
+  }
+
+  if (_p3dControls) _p3dControls.target.set(globalMaxX/2, 0, globalMaxZ/2);
+
+  LAYOUT_ORDER.forEach(function(letter) {
+    var segs = groups.filter(function(g){return g.bin===letter;});
+    var origin = Math.min.apply(null, segs.map(function(s){return s.rowFrom;}));
+    var maxRow = Math.max.apply(null, segs.map(function(s){return s.rowTo;}));
+    var nx = maxRow - origin + 1;
+    var zBase = rackMeta[letter].start;
+    var rackDepth = maxDepth(letter);
+    var isMirrored = MIRRORED.indexOf(letter) !== -1;
+
+    var SEG_GAP = 3;
+    var xGapOffset = 0;
+    var prevSeg = null;
+    var positions = [];
+    for (var xi=0; xi<nx; xi++) {
+      var rowNum = origin + xi;
+      var seg = segs.find(function(s){return rowNum>=s.rowFrom && rowNum<=s.rowTo;});
+      if (!seg) continue;
+      if (letter === 'G' && prevSeg && prevSeg !== seg) xGapOffset += SEG_GAP;
+      prevSeg = seg;
+      positions.push({ sx: xi + xGapOffset, seg: seg });
+    }
+
+    positions.forEach(function(p) {
+      var iShift = (letter === 'I') ? 7 : 0;
+      var finalX = p.sx + iShift;
+      var seg = p.seg;
+      var ny = seg.depth, nz = seg.level;
+      var iBackAlign = (letter === 'I' && seg.rowFrom >= 28);
+      var zBaseEff = iBackAlign ? (zBase + (rackDepth - ny)) : zBase;
+      postData.push({ x: finalX,   zBase: zBaseEff, depth: ny, levels: nz });
+      postData.push({ x: finalX+1, zBase: zBaseEff, depth: ny, levels: nz });
+    });
+  });
+
+  // ── Ambil data stok ASLI (binMap), render kotak isi pakai warna asli p3dColorForItem ──
+  var binMap = {};
+  (_petaData || []).forEach(function(r) {
+    if (!binMap[r.binLoc]) binMap[r.binLoc] = { used: 0, items: [] };
+    var pecList = (r.pecahan_list && r.pecahan_list.length > 0) ? r.pecahan_list : ((r.pecahan||0) > 0 ? [r.pecahan] : []);
+    binMap[r.binLoc].used += (r.pallet || 0) + pecList.length;
+    binMap[r.binLoc].items.push(r);
+  });
+
+  LAYOUT_ORDER.forEach(function(letter) {
+    var segs = groups.filter(function(g){return g.bin===letter;});
+    var origin = Math.min.apply(null, segs.map(function(s){return s.rowFrom;}));
+    var maxRow = Math.max.apply(null, segs.map(function(s){return s.rowTo;}));
+    var nx = maxRow - origin + 1;
+    var zBase = rackMeta[letter].start;
+    var rackDepth = maxDepth(letter);
+    var SEG_GAP = 3;
+    var xGapOffset = 0, prevSeg = null;
+    for (var xi=0; xi<nx; xi++) {
+      var rowNum = origin + xi;
+      var seg = segs.find(function(s){return rowNum>=s.rowFrom && rowNum<=s.rowTo;});
+      if (!seg) continue;
+      if (letter === 'G' && prevSeg && prevSeg !== seg) xGapOffset += SEG_GAP;
+      prevSeg = seg;
+      var iShift = (letter === 'I') ? 7 : 0;
+      var finalX = xi + xGapOffset + iShift;
+      var ny = seg.depth, nz = seg.level;
+      var iBackAlign = (letter === 'I' && seg.rowFrom >= 28);
+      var zBaseEff = iBackAlign ? (zBase + (rackDepth - ny)) : zBase;
+      var binCode = letter + rowNum;
+      var info = binMap[binCode];
+      if (!info || !info.items.length) continue;
+      var order = [];
+      for (var z=nz-1; z>=0; z--) for (var y=ny-1; y>=0; y--) order.push([y,z]);
+      var slotPtr = 0;
+      info.items.forEach(function(item) {
+        var pecList = (item.pecahan_list && item.pecahan_list.length > 0) ? item.pecahan_list : ((item.pecahan||0) > 0 ? [item.pecahan] : []);
+        var units = (item.pallet || 0) + pecList.length;
+        var colorHex = (typeof p3dColorForItem === 'function') ? p3dColorForItem(item) : '#94a3b8';
+        var colorInt = parseInt(colorHex.replace('#','0x'));
+        for (var u=0; u<units && slotPtr<order.length; u++, slotPtr++) {
+          var depthIdx = isMir(letter) ? (ny-1-order[slotPtr][0]) : order[slotPtr][0];
+          boxData.push({ x: finalX, y: order[slotPtr][1], z: zBaseEff+depthIdx, color: colorInt });
+          totalBoxes++;
+        }
+      });
+    }
+  });
+  function isMir(l){ return MIRRORED.indexOf(l) !== -1; }
+
+  var postGeo = new THREE.BoxGeometry(0.06, 1, 0.06);
+  var postMat = new THREE.MeshBasicMaterial({ color: 0x1e3a8a });
+  var postInstances = [];
+  postData.forEach(function(p) {
+    postInstances.push({ x:p.x, z:p.zBase, h:p.levels });
+    postInstances.push({ x:p.x, z:p.zBase+p.depth, h:p.levels });
+  });
+  var postMesh = new THREE.InstancedMesh(postGeo, postMat, postInstances.length || 1);
+  postInstances.forEach(function(pi, i) {
+    mtx.compose(new THREE.Vector3(pi.x, pi.h/2, pi.z), identityQuat, new THREE.Vector3(1, pi.h, 1));
+    postMesh.setMatrixAt(i, mtx);
+  });
+  framesGroup.add(postMesh);
+
+  var beamInstances = [];
+  LAYOUT_ORDER.forEach(function(letter) {
+    var segs = groups.filter(function(g){return g.bin===letter;});
+    var origin = Math.min.apply(null, segs.map(function(s){return s.rowFrom;}));
+    var maxRow = Math.max.apply(null, segs.map(function(s){return s.rowTo;}));
+    var nx = maxRow - origin + 1;
+    var zBase = rackMeta[letter].start;
+    var lvls = maxLevel(letter);
+    var rackDepthB = maxDepth(letter);
+    var xGapOffsetB = 0, prevSegB = null;
+    var posB = [];
+    for (var xi2=0; xi2<nx; xi2++) {
+      var rowNum2 = origin + xi2;
+      var seg2 = segs.find(function(s){return rowNum2>=s.rowFrom && rowNum2<=s.rowTo;});
+      if (!seg2) continue;
+      if (letter === 'G' && prevSegB && prevSegB !== seg2) xGapOffsetB += 3;
+      prevSegB = seg2;
+      var iBackAlignB = (letter === 'I' && seg2.rowFrom >= 28);
+      var zBaseEffB = iBackAlignB ? (zBase + (rackDepthB - seg2.depth)) : zBase;
+      posB.push({ sx: xi2 + xGapOffsetB, depth: seg2.depth, zBaseEff: zBaseEffB });
+    }
+    posB.forEach(function(p) {
+      var iShiftB = (letter === 'I') ? 7 : 0;
+      var fx = p.sx + iShiftB;
+      for (var lvl2=0; lvl2<=lvls; lvl2++) {
+        beamInstances.push({ x:fx,   y:lvl2, z:p.zBaseEff+p.depth/2, depth:p.depth });
+        beamInstances.push({ x:fx+1, y:lvl2, z:p.zBaseEff+p.depth/2, depth:p.depth });
+      }
+    });
+  });
+  var beamGeo = new THREE.BoxGeometry(0.07, 0.09, 1);
+  var beamMat = new THREE.MeshStandardMaterial({ color: 0xc2410c, roughness:0.5 });
+  var beamMesh = new THREE.InstancedMesh(beamGeo, beamMat, beamInstances.length || 1);
+  beamInstances.forEach(function(bi, i) {
+    mtx.compose(new THREE.Vector3(bi.x, bi.y, bi.z), identityQuat, new THREE.Vector3(1,1,bi.depth));
+    beamMesh.setMatrixAt(i, mtx);
+  });
+  framesGroup.add(beamMesh);
+
+  var beamXInstances = [];
+  LAYOUT_ORDER.forEach(function(letter) {
+    var segs = groups.filter(function(g){return g.bin===letter;});
+    var origin = Math.min.apply(null, segs.map(function(s){return s.rowFrom;}));
+    var maxRow = Math.max.apply(null, segs.map(function(s){return s.rowTo;}));
+    var nx = maxRow - origin + 1;
+    var zBase = rackMeta[letter].start;
+    var lvls = maxLevel(letter);
+    var rackDepthB = maxDepth(letter);
+    var xGapOffsetB = 0, prevSegB = null;
+    var posB = [];
+    for (var xi2=0; xi2<nx; xi2++) {
+      var rowNum2 = origin + xi2;
+      var seg2 = segs.find(function(s){return rowNum2>=s.rowFrom && rowNum2<=s.rowTo;});
+      if (!seg2) continue;
+      if (letter === 'G' && prevSegB && prevSegB !== seg2) xGapOffsetB += 3;
+      prevSegB = seg2;
+      var iBackAlignB = (letter === 'I' && seg2.rowFrom >= 28);
+      var zBaseEffB = iBackAlignB ? (zBase + (rackDepthB - seg2.depth)) : zBase;
+      posB.push({ sx: xi2 + xGapOffsetB, depth: seg2.depth, zBaseEff: zBaseEffB });
+    }
+    posB.forEach(function(p) {
+      var iShiftB = (letter === 'I') ? 7 : 0;
+      var fx = p.sx + iShiftB;
+      for (var lvl2=0; lvl2<lvls; lvl2++) {
+        for (var d=2; d<=p.depth; d+=2) {
+          beamXInstances.push({ x:fx+0.5, y:lvl2, z:p.zBaseEff + d - 0.5 });
+        }
+      }
+    });
+  });
+  var beamXGeo = new THREE.BoxGeometry(1, 0.09, 0.07);
+  var beamXMat = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness:0.5 });
+  var beamXMesh = new THREE.InstancedMesh(beamXGeo, beamXMat, beamXInstances.length || 1);
+  beamXInstances.forEach(function(bi, i) {
+    mtx.compose(new THREE.Vector3(bi.x, bi.y, bi.z), identityQuat, new THREE.Vector3(1,1,1));
+    beamXMesh.setMatrixAt(i, mtx);
+  });
+  framesGroup.add(beamXMesh);
+
+  var byColor = {};
+  boxData.forEach(function(b){ (byColor[b.color] = byColor[b.color]||[]).push(b); });
+  var boxGeo = new THREE.BoxGeometry(0.86, 0.8, 0.86);
+  var palletGeo = new THREE.BoxGeometry(0.9, 0.12, 0.9);
+  var palletMat = new THREE.MeshStandardMaterial({ color: PALLET_COLOR, roughness:0.8 });
+  Object.keys(byColor).forEach(function(colorKey) {
+    var arr = byColor[colorKey];
+    var mat = new THREE.MeshStandardMaterial({ color: parseInt(colorKey), roughness:0.6 });
+    var mesh = new THREE.InstancedMesh(boxGeo, mat, arr.length);
+    arr.forEach(function(b, i) {
+      dummy.position.set(b.x + 0.5, b.y + 0.5 + 0.06, b.z + 0.5);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+    });
+    boxesGroup.add(mesh);
+  });
+  if (boxData.length) {
+    var palletMesh = new THREE.InstancedMesh(palletGeo, palletMat, boxData.length);
+    boxData.forEach(function(b, i) {
+      dummy.position.set(b.x + 0.5, b.y + 0.06, b.z + 0.5);
+      dummy.updateMatrix();
+      palletMesh.setMatrixAt(i, dummy.matrix);
+    });
+    boxesGroup.add(palletMesh);
+
+    var hx=0.43, hy=0.4, hz=0.43;
+    var corners = [
+      [-hx,-hy,-hz],[hx,-hy,-hz],[hx,hy,-hz],[-hx,hy,-hz],
+      [-hx,-hy, hz],[hx,-hy, hz],[hx,hy, hz],[-hx,hy, hz]
+    ];
+    var edgeIdx = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+    var boxLinePts = [];
+    boxData.forEach(function(b) {
+      var cx=b.x+0.5, cy=b.y+0.5+0.06, cz=b.z+0.5;
+      edgeIdx.forEach(function(e) {
+        var p1=corners[e[0]], p2=corners[e[1]];
+        boxLinePts.push(cx+p1[0], cy+p1[1], cz+p1[2],  cx+p2[0], cy+p2[1], cz+p2[2]);
+      });
+      [0.12,0.4,0.68].forEach(function(t) {
+        var yy = -hy + t*2*hy;
+        boxLinePts.push(cx+hx, cy+yy, cz-hz,  cx+hx, cy+yy, cz+hz);
+        boxLinePts.push(cx-hx, cy+yy, cz+hz,  cx+hx, cy+yy, cz+hz);
+      });
+      boxLinePts.push(cx+hx, cy-hy, cz,  cx+hx, cy+hy, cz);
+      boxLinePts.push(cx,    cy-hy, cz+hz,  cx, cy+hy, cz+hz);
+      [1/3, 2/3].forEach(function(t) {
+        var zz = -hz + t*2*hz;
+        boxLinePts.push(cx-hx, cy+hy, cz+zz,  cx+hx, cy+hy, cz+zz);
+        var xx = -hx + t*2*hx;
+        boxLinePts.push(cx+xx, cy+hy, cz-hz,  cx+xx, cy+hy, cz+hz);
+      });
+    });
+    var boxLineGeo = new THREE.BufferGeometry();
+    boxLineGeo.setAttribute('position', new THREE.Float32BufferAttribute(boxLinePts, 3));
+    var boxLineMat = new THREE.LineBasicMaterial({ color: 0x000000, transparent:true, opacity:0.55 });
+    boxesGroup.add(new THREE.LineSegments(boxLineGeo, boxLineMat));
+  }
+}
+})();
+</script>
+
 </body>
 </html>
