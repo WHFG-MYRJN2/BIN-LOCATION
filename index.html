@@ -109,8 +109,9 @@ input:focus, select:focus {
   flex-shrink: 0;
 }
 .app-header .title-group { flex: 1; min-width: 0; }
-.app-header .title-group h2 { font-family: var(--sans); font-size: 16px; font-weight: 700; }
-.app-header .title-group .sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.app-header .title-group h2 { font-family: var(--sans); font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app-header .title-group .sub { font-size: 11px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app-header .badge { align-self: center; }
 .badge {
   padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500;
   flex-shrink: 0;
@@ -1045,7 +1046,7 @@ input:focus, select:focus {
     <div class="back-btn" onclick="goBack('screen-tipe')">←</div>
     <div class="title-group">
       <h2>Input Bin Loc</h2>
-      <div class="sub" id="bin-screen-sub">Ketik kode bin dari label racking</div>
+      <div class="sub" id="bin-screen-sub">Kode bin dari racking</div>
     </div>
     <div class="badge" id="bin-badge">—</div>
   </div>
@@ -2050,7 +2051,7 @@ function setBinMode(mode) {
   var suggestBox = document.getElementById('bin-loc-suggest');
   if (suggestBox) { suggestBox.style.display = 'none'; suggestBox.innerHTML = ''; }
   var icon = mode==='lainlain' ? '📍' : '📦';
-  var sub  = mode==='lainlain' ? 'Pilih lokasi atau tambah baru' : 'Ketik kode bin dari label racking';
+  var sub  = mode==='lainlain' ? 'Pilih lokasi atau tambah baru' : 'Kode bin dari racking';
   document.getElementById('bin-screen-icon').textContent = icon;
   document.getElementById('bin-screen-sub').textContent  = sub;
   if (mode === 'lainlain') {
@@ -6730,6 +6731,8 @@ var _p3dScene, _p3dCamera, _p3dRenderer, _p3dControls, _p3dInitDone = false;
 var _p3dInitialCamPos, _p3dInitialTarget;
 var _p3dTHREE, _p3dOrbitControls;
 var _p3dSceneCenter = { x: 20, y: 6, z: 15 }; // fallback sebelum scene ke-build
+var _p3dViewAnim = null; // { fromPos, fromTarget, toPos, toTarget, start, dur } — animasi smooth pindah sudut kamera
+function _p3dEaseInOut(t) { return t < 0.5 ? 2*t*t : -1 + (4-2*t)*t; }
 
 window.peta3DSetViewMode = function(mode) {
   var btnA = document.getElementById('peta3d-view-aktual');
@@ -6789,6 +6792,7 @@ async function _p3dInitRotateView() {
   _p3dControls.enableDamping = true;
   _p3dControls.minPolarAngle = 0.05;
   _p3dControls.maxPolarAngle = Math.PI * 0.495;
+  _p3dControls.addEventListener('start', function() { _p3dViewAnim = null; });
   _p3dScene.add(new THREE.AmbientLight(0xffffff, 0.8));
   var dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
   dirLight.position.set(30,50,20);
@@ -6799,9 +6803,14 @@ async function _p3dInitRotateView() {
   _p3dInitialCamPos = _p3dCamera.position.clone();
   _p3dInitialTarget = _p3dControls.target.clone();
   window.peta3DResetView = function() {
-    _p3dCamera.position.copy(_p3dInitialCamPos);
-    _p3dControls.target.copy(_p3dInitialTarget);
-    _p3dControls.update();
+    _p3dViewAnim = {
+      fromPos: _p3dCamera.position.clone(),
+      fromTarget: _p3dControls.target.clone(),
+      toPos: _p3dInitialCamPos.clone(),
+      toTarget: _p3dInitialTarget.clone(),
+      start: performance.now(),
+      dur: 500
+    };
   };
   // ── Preset view (viewcube AutoCAD-style) — klik sekali langsung snap ke sudut tertentu ──
   var _p3dDist = 220;
@@ -6818,17 +6827,39 @@ async function _p3dInitRotateView() {
     if (!dir || !_p3dCamera || !_p3dControls) return;
     var len = Math.sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
     var c = _p3dSceneCenter;
-    _p3dCamera.position.set(
-      c.x + (dir.x/len) * _p3dDist,
-      c.y + (dir.y/len) * _p3dDist,
-      c.z + (dir.z/len) * _p3dDist
-    );
-    _p3dControls.target.set(c.x, c.y, c.z);
-    _p3dControls.update();
+    _p3dViewAnim = {
+      fromPos: _p3dCamera.position.clone(),
+      fromTarget: _p3dControls.target.clone(),
+      toPos: new THREE.Vector3(
+        c.x + (dir.x/len) * _p3dDist,
+        c.y + (dir.y/len) * _p3dDist,
+        c.z + (dir.z/len) * _p3dDist
+      ),
+      toTarget: new THREE.Vector3(c.x, c.y, c.z),
+      start: performance.now(),
+      dur: 500
+    };
   };
   var lastT = performance.now();
   function animate() {
     requestAnimationFrame(animate);
+    if (_p3dViewAnim) {
+      var a = _p3dViewAnim;
+      var t = (performance.now() - a.start) / a.dur;
+      if (t >= 1) t = 1;
+      var e = _p3dEaseInOut(t);
+      _p3dCamera.position.set(
+        a.fromPos.x + (a.toPos.x - a.fromPos.x) * e,
+        a.fromPos.y + (a.toPos.y - a.fromPos.y) * e,
+        a.fromPos.z + (a.toPos.z - a.fromPos.z) * e
+      );
+      _p3dControls.target.set(
+        a.fromTarget.x + (a.toTarget.x - a.fromTarget.x) * e,
+        a.fromTarget.y + (a.toTarget.y - a.fromTarget.y) * e,
+        a.fromTarget.z + (a.toTarget.z - a.fromTarget.z) * e
+      );
+      if (t >= 1) _p3dViewAnim = null;
+    }
     if (_p3dControls) _p3dControls.update();
     if (_p3dRenderer && _p3dScene && _p3dCamera) _p3dRenderer.render(_p3dScene, _p3dCamera);
   }
