@@ -179,9 +179,8 @@ input:focus, select:focus {
 .tipe-card .card-desc { font-size: 12px; color: var(--muted); margin-top: 4px; }
 
 /* ── SCREEN 2: INPUT BIN ── */
-#screen-bin {
-  justify-content: center; align-items: center; padding: 32px 24px; gap: 16px;
-}
+/* (styling center/padding sudah dihandle wrapper div di dalam konten, bukan di level screen —
+   biar app-header tetap full-width & gak ikut ke-center/ke-padding kaya bug sebelumnya) */
 .bin-input-title {
   font-family: var(--sans); font-size: 24px; font-weight: 800;
   text-align: center; line-height: 1.2;
@@ -6731,8 +6730,26 @@ var _p3dScene, _p3dCamera, _p3dRenderer, _p3dControls, _p3dInitDone = false;
 var _p3dInitialCamPos, _p3dInitialTarget;
 var _p3dTHREE, _p3dOrbitControls;
 var _p3dSceneCenter = { x: 20, y: 6, z: 15 }; // fallback sebelum scene ke-build
-var _p3dViewAnim = null; // { fromPos, fromTarget, toPos, toTarget, start, dur } — animasi smooth pindah sudut kamera
+var _p3dViewAnim = null; // { fromTarget, toTarget, fromSph, toSph, start, dur } — animasi smooth pindah sudut kamera
 function _p3dEaseInOut(t) { return t < 0.5 ? 2*t*t : -1 + (4-2*t)*t; }
+// ── Helper spherical (radius/theta/phi) relatif ke target — biar animasi kamera muter
+// di jalur lingkaran (bukan garis lurus XYZ) dan gak "nyelonong" lewat orientasi aneh ──
+function _p3dToSpherical(offset) {
+  var radius = Math.sqrt(offset.x*offset.x + offset.y*offset.y + offset.z*offset.z);
+  var theta  = Math.atan2(offset.x, offset.z);
+  var phi    = radius > 0 ? Math.acos(Math.max(-1, Math.min(1, offset.y / radius))) : 0;
+  return { radius: radius, theta: theta, phi: phi };
+}
+function _p3dFromSpherical(sph) {
+  var sinPhiRadius = Math.sin(sph.phi) * sph.radius;
+  return { x: sinPhiRadius * Math.sin(sph.theta), y: Math.cos(sph.phi) * sph.radius, z: sinPhiRadius * Math.cos(sph.theta) };
+}
+function _p3dShortestAngleLerp(a, b, t) {
+  var diff = b - a;
+  while (diff > Math.PI)  diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return a + diff * t;
+}
 
 window.peta3DSetViewMode = function(mode) {
   var btnA = document.getElementById('peta3d-view-aktual');
@@ -6791,7 +6808,7 @@ async function _p3dInitRotateView() {
   _p3dControls.target.set(20,0,15);
   _p3dControls.enableDamping = true;
   _p3dControls.minPolarAngle = 0.05;
-  _p3dControls.maxPolarAngle = Math.PI * 0.495;
+  _p3dControls.maxPolarAngle = Math.PI * 0.5; // izinkan persis 90° (horizontal) buat preset front/back/left/right
   _p3dControls.addEventListener('start', function() { _p3dViewAnim = null; });
   _p3dScene.add(new THREE.AmbientLight(0xffffff, 0.8));
   var dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
@@ -6803,23 +6820,24 @@ async function _p3dInitRotateView() {
   _p3dInitialCamPos = _p3dCamera.position.clone();
   _p3dInitialTarget = _p3dControls.target.clone();
   window.peta3DResetView = function() {
+    var fromTarget = _p3dControls.target.clone();
+    var toTarget   = _p3dInitialTarget.clone();
+    var fromOffset = { x: _p3dCamera.position.x - fromTarget.x, y: _p3dCamera.position.y - fromTarget.y, z: _p3dCamera.position.z - fromTarget.z };
+    var toOffset   = { x: _p3dInitialCamPos.x - toTarget.x,     y: _p3dInitialCamPos.y - toTarget.y,     z: _p3dInitialCamPos.z - toTarget.z };
     _p3dViewAnim = {
-      fromPos: _p3dCamera.position.clone(),
-      fromTarget: _p3dControls.target.clone(),
-      toPos: _p3dInitialCamPos.clone(),
-      toTarget: _p3dInitialTarget.clone(),
-      start: performance.now(),
-      dur: 500
+      fromTarget: fromTarget, toTarget: toTarget,
+      fromSph: _p3dToSpherical(fromOffset), toSph: _p3dToSpherical(toOffset),
+      start: performance.now(), dur: 500
     };
   };
   // ── Preset view (viewcube AutoCAD-style) — klik sekali langsung snap ke sudut tertentu ──
   var _p3dDist = 220;
   var _p3dPresetDirs = {
     top:    { x: 0,     y: 1,     z: 0     },
-    front:  { x: 0,     y: 0.14,  z: 1     },
-    back:   { x: 0,     y: 0.14,  z: -1    },
-    left:   { x: -1,    y: 0.14,  z: 0     },
-    right:  { x: 1,     y: 0.14,  z: 0     },
+    front:  { x: 0,     y: 0,     z: 1     },
+    back:   { x: 0,     y: 0,     z: -1    },
+    left:   { x: -1,    y: 0,     z: 0     },
+    right:  { x: 1,     y: 0,     z: 0     },
     iso:    { x: 1,     y: 0.85,  z: 1     }
   };
   window.peta3DSetPresetView = function(view) {
@@ -6827,17 +6845,14 @@ async function _p3dInitRotateView() {
     if (!dir || !_p3dCamera || !_p3dControls) return;
     var len = Math.sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
     var c = _p3dSceneCenter;
+    var fromTarget = _p3dControls.target.clone();
+    var toTarget   = { x: c.x, y: c.y, z: c.z };
+    var fromOffset = { x: _p3dCamera.position.x - fromTarget.x, y: _p3dCamera.position.y - fromTarget.y, z: _p3dCamera.position.z - fromTarget.z };
+    var toOffset   = { x: (dir.x/len) * _p3dDist, y: (dir.y/len) * _p3dDist, z: (dir.z/len) * _p3dDist };
     _p3dViewAnim = {
-      fromPos: _p3dCamera.position.clone(),
-      fromTarget: _p3dControls.target.clone(),
-      toPos: new THREE.Vector3(
-        c.x + (dir.x/len) * _p3dDist,
-        c.y + (dir.y/len) * _p3dDist,
-        c.z + (dir.z/len) * _p3dDist
-      ),
-      toTarget: new THREE.Vector3(c.x, c.y, c.z),
-      start: performance.now(),
-      dur: 500
+      fromTarget: fromTarget, toTarget: toTarget,
+      fromSph: _p3dToSpherical(fromOffset), toSph: _p3dToSpherical(toOffset),
+      start: performance.now(), dur: 500
     };
   };
   var lastT = performance.now();
@@ -6848,16 +6863,19 @@ async function _p3dInitRotateView() {
       var t = (performance.now() - a.start) / a.dur;
       if (t >= 1) t = 1;
       var e = _p3dEaseInOut(t);
-      _p3dCamera.position.set(
-        a.fromPos.x + (a.toPos.x - a.fromPos.x) * e,
-        a.fromPos.y + (a.toPos.y - a.fromPos.y) * e,
-        a.fromPos.z + (a.toPos.z - a.fromPos.z) * e
-      );
-      _p3dControls.target.set(
-        a.fromTarget.x + (a.toTarget.x - a.fromTarget.x) * e,
-        a.fromTarget.y + (a.toTarget.y - a.fromTarget.y) * e,
-        a.fromTarget.z + (a.toTarget.z - a.fromTarget.z) * e
-      );
+      var curTarget = {
+        x: a.fromTarget.x + (a.toTarget.x - a.fromTarget.x) * e,
+        y: a.fromTarget.y + (a.toTarget.y - a.fromTarget.y) * e,
+        z: a.fromTarget.z + (a.toTarget.z - a.fromTarget.z) * e
+      };
+      var curSph = {
+        radius: a.fromSph.radius + (a.toSph.radius - a.fromSph.radius) * e,
+        theta:  _p3dShortestAngleLerp(a.fromSph.theta, a.toSph.theta, e),
+        phi:    a.fromSph.phi + (a.toSph.phi - a.fromSph.phi) * e
+      };
+      var offset = _p3dFromSpherical(curSph);
+      _p3dCamera.position.set(curTarget.x + offset.x, curTarget.y + offset.y, curTarget.z + offset.z);
+      _p3dControls.target.set(curTarget.x, curTarget.y, curTarget.z);
       if (t >= 1) _p3dViewAnim = null;
     }
     if (_p3dControls) _p3dControls.update();
