@@ -6833,12 +6833,12 @@ async function _p3dInitRotateView() {
   // ── Preset view (viewcube AutoCAD-style) — klik sekali langsung snap ke sudut tertentu ──
   var _p3dDist = 220;
   var _p3dPresetDirs = {
-    top:    { x: 0,     y: 1,     z: 0     },
-    front:  { x: 0,     y: 0,     z: 1     },
-    back:   { x: 0,     y: 0,     z: -1    },
-    left:   { x: -1,    y: 0,     z: 0     },
-    right:  { x: 1,     y: 0,     z: 0     },
-    iso:    { x: 1,     y: 0.85,  z: 1     }
+    top:    { x: 0.0001, y: 1,     z: 0     }, // top diputar 90° biar sejajar sama front/back baru
+    front:  { x: -1,     y: 0,     z: 0     }, // dulu 'left'
+    back:   { x: 1,      y: 0,     z: 0     }, // dulu 'right'
+    left:   { x: 0,      y: 0,     z: 1     }, // dulu 'front'
+    right:  { x: 0,      y: 0,     z: -1    }, // dulu 'back'
+    iso:    { x: 1,      y: 0.85,  z: 1     }
   };
   window.peta3DSetPresetView = function(view) {
     var dir = _p3dPresetDirs[view];
