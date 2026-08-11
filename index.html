@@ -6752,13 +6752,14 @@ function _p3dShortestAngleLerp(a, b, t) {
   return a + diff * t;
 }
 // ── Sprite label nama blok ("BLOK A" dst) ngambang di atas rak, di scene Rotate 3D ──
-function _p3dMakeLabelSprite(text) {
+function _p3dMakeLabelSprite(text, opts) {
+  opts = opts || {};
   var THREE = _p3dTHREE;
   var canvas = document.createElement('canvas');
-  canvas.width = 160; canvas.height = 64;
+  canvas.width = opts.canvasW || 160; canvas.height = opts.canvasH || 64;
   var ctx = canvas.getContext('2d');
   var r = 16;
-  ctx.fillStyle = 'rgba(24,24,32,0.82)';
+  ctx.fillStyle = opts.bg || 'rgba(24,24,32,0.82)';
   ctx.beginPath();
   ctx.moveTo(r,4); ctx.lineTo(canvas.width-r,4);
   ctx.quadraticCurveTo(canvas.width-4,4,canvas.width-4,r+4);
@@ -6770,11 +6771,17 @@ function _p3dMakeLabelSprite(text) {
   ctx.quadraticCurveTo(4,4,r+4,4);
   ctx.closePath();
   ctx.fill();
-  ctx.strokeStyle = 'rgba(147,51,234,0.9)';
+  ctx.strokeStyle = opts.border || 'rgba(147,51,234,0.9)';
   ctx.lineWidth = 3;
   ctx.stroke();
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 30px Arial';
+  var fontPx = opts.fontPx || 30;
+  ctx.font = 'bold ' + fontPx + 'px Arial';
+  // Auto-kecilin font kalau teks masih kepanjangan buat lebar canvas-nya
+  while (ctx.measureText(text).width > canvas.width - 24 && fontPx > 12) {
+    fontPx -= 2;
+    ctx.font = 'bold ' + fontPx + 'px Arial';
+  }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, canvas.width/2, canvas.height/2 + 2);
@@ -6782,7 +6789,8 @@ function _p3dMakeLabelSprite(text) {
   tex.minFilter = THREE.LinearFilter;
   var mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true });
   var sprite = new THREE.Sprite(mat);
-  sprite.scale.set(5, 2, 1);
+  var sc = opts.scale || [5, 2, 1];
+  sprite.scale.set(sc[0], sc[1], sc[2]);
   return sprite;
 }
 
@@ -7001,26 +7009,21 @@ function _p3dBuildRotateScene() {
   floorMesh.position.set(globalMaxX/2, 0, globalMaxZ/2);
   floorGroup.add(floorMesh);
 
-  // ── Garis tepi luar (teal) — outline staircase mengikuti panjang rak asli per blok,
-  // pola sama kayak BORDER_POINTS di render 2D (sisi depan rata, sisi belakang staircase) ──
-  var outlinePad = floorPad - 0.5;
-  var corners = [{ x: -outlinePad, z: -outlinePad }];
-  LAYOUT_ORDER.forEach(function(l, idx) {
-    var s = groups.filter(function(g){return g.bin===l;});
-    var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
-    var nxRaw = Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;}));
-    var extraL = (l === 'G' ? (s.length-1)*3 : 0) + (l === 'I' ? 9 : 0);
-    var xMax = nxRaw + extraL + outlinePad;
-    var zEnd = rackMeta[l].start + maxDepth(l) + (idx === LAYOUT_ORDER.length-1 ? outlinePad : 0);
-    var lastZ = corners[corners.length-1].z;
-    corners.push({ x: xMax, z: lastZ }); // step keluar horizontal ke lebar rak ini
-    corners.push({ x: xMax, z: zEnd });  // lanjut sepanjang Z sampai ujung blok ini
+  // ── Garis tepi luar (teal) — pakai BORDER_POINTS yang sama kayak sistem Bin T,
+  // di-skalakan proporsional (X: rentang asli BORDER_POINTS → globalMaxX; Y row 4-27 → globalMaxZ)
+  // biar bentuk staircase persis sesuai yang Bos tentuin, tapi pas sama ukuran scene 3D ini ──
+  var bpXs = BORDER_POINTS.map(function(p){ return p.x; });
+  var bpXmin = Math.min.apply(null, bpXs), bpXmax = Math.max.apply(null, bpXs);
+  var outlineCorners = BORDER_POINTS.map(function(p) {
+    var xProp = (p.x - bpXmin) / (bpXmax - bpXmin);
+    var yProp = (p.y - T_EXCEL_ROW_MIN) / (T_EXCEL_ROW_MAX - T_EXCEL_ROW_MIN);
+    return { x: xProp * globalMaxX, z: yProp * globalMaxZ };
   });
-  corners.push({ x: -outlinePad, z: globalMaxZ + outlinePad }); // balik ke sisi kiri/depan
-  corners.push({ x: -outlinePad, z: -outlinePad });             // tutup polygon
   var outlineLinePts = [];
-  for (var oi = 0; oi < corners.length - 1; oi++) {
-    outlineLinePts.push(corners[oi].x, 0.02, corners[oi].z, corners[oi+1].x, 0.02, corners[oi+1].z);
+  for (var oi = 0; oi < outlineCorners.length; oi++) {
+    var pA = outlineCorners[oi];
+    var pB = outlineCorners[(oi + 1) % outlineCorners.length]; // tutup polygon (titik terakhir → titik pertama)
+    outlineLinePts.push(pA.x, 0.02, pA.z, pB.x, 0.02, pB.z);
   }
   var outlineGeo = new THREE.BufferGeometry();
   outlineGeo.setAttribute('position', new THREE.Float32BufferAttribute(outlineLinePts, 3));
@@ -7028,9 +7031,10 @@ function _p3dBuildRotateScene() {
   floorGroup.add(new THREE.LineSegments(outlineGeo, outlineMat));
 
   // ── Label "LOADING DOCK" — nempel di sisi FRONT (X kecil, arah kamera preset 'front') ──
-  var dockLabel = _p3dMakeLabelSprite('🚚 LOADING DOCK');
-  dockLabel.scale.set(9, 3.2, 1);
-  dockLabel.position.set(-outlinePad - 1.5, 6, globalMaxZ/2);
+  var dockLabel = _p3dMakeLabelSprite('🚚 LOADING DOCK', {
+    canvasW: 420, canvasH: 110, fontPx: 42, scale: [11, 3, 1]
+  });
+  dockLabel.position.set(-floorPad + 1, 6, globalMaxZ/2);
   labelsGroup.add(dockLabel);
 
   var LOKAL_COLORS = [0xff0000,0xf7ff00,0x19e619,0x3b82f6,0xf97316,0xefefef];
