@@ -6751,6 +6751,40 @@ function _p3dShortestAngleLerp(a, b, t) {
   while (diff < -Math.PI) diff += Math.PI * 2;
   return a + diff * t;
 }
+// ── Sprite label nama blok ("BLOK A" dst) ngambang di atas rak, di scene Rotate 3D ──
+function _p3dMakeLabelSprite(text) {
+  var THREE = _p3dTHREE;
+  var canvas = document.createElement('canvas');
+  canvas.width = 160; canvas.height = 64;
+  var ctx = canvas.getContext('2d');
+  var r = 16;
+  ctx.fillStyle = 'rgba(24,24,32,0.82)';
+  ctx.beginPath();
+  ctx.moveTo(r,4); ctx.lineTo(canvas.width-r,4);
+  ctx.quadraticCurveTo(canvas.width-4,4,canvas.width-4,r+4);
+  ctx.lineTo(canvas.width-4,canvas.height-r-4);
+  ctx.quadraticCurveTo(canvas.width-4,canvas.height-4,canvas.width-r-4,canvas.height-4);
+  ctx.lineTo(r+4,canvas.height-4);
+  ctx.quadraticCurveTo(4,canvas.height-4,4,canvas.height-r-4);
+  ctx.lineTo(4,r+4);
+  ctx.quadraticCurveTo(4,4,r+4,4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(147,51,234,0.9)';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 30px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, canvas.width/2, canvas.height/2 + 2);
+  var tex = new THREE.CanvasTexture(canvas);
+  tex.minFilter = THREE.LinearFilter;
+  var mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true });
+  var sprite = new THREE.Sprite(mat);
+  sprite.scale.set(5, 2, 1);
+  return sprite;
+}
 
 window.peta3DSetViewMode = function(mode) {
   var btnA = document.getElementById('peta3d-view-aktual');
@@ -6834,7 +6868,7 @@ async function _p3dInitRotateView() {
   // ── Preset view (viewcube AutoCAD-style) — klik sekali langsung snap ke sudut tertentu ──
   var _p3dDist = 220;
   var _p3dPresetDirs = {
-    top:    { x: 0.0001, y: 1,     z: 0     }, // top diputar 90° biar sejajar sama front/back baru
+    top:    { x: -0.0001, y: 1,    z: 0     }, // diputar 180° lagi dari sebelumnya (total 270° dari azimuth awal)
     front:  { x: -1,     y: 0,     z: 0     }, // dulu 'left'
     back:   { x: 1,      y: 0,     z: 0     }, // dulu 'right'
     left:   { x: 0,      y: 0,     z: 1     }, // dulu 'front'
@@ -6944,6 +6978,19 @@ function _p3dBuildRotateScene() {
   }));
   // Simpan titik tengah scene — dipakai buat snap preset view (viewcube AutoCAD-style)
   _p3dSceneCenter = { x: globalMaxX/2, y: 6, z: globalMaxZ/2 };
+
+  // ── Label nama blok ("BLOK A", "BLOK B", dst) ngambang di atas tiap rak ──
+  var labelsGroup = new THREE.Group();
+  _p3dScene.add(labelsGroup);
+  LAYOUT_ORDER.forEach(function(l) {
+    var s = groups.filter(function(g){return g.bin===l;});
+    var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
+    var nxRaw = Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;}));
+    var iShift = (l === 'I') ? 9 : 0;
+    var label = _p3dMakeLabelSprite('BLOK ' + l);
+    label.position.set(nxRaw/2 + iShift, maxLevel(l) + 2.5, rackMeta[l].start + maxDepth(l)/2);
+    labelsGroup.add(label);
+  });
 
   var floorPad = 3;
   var floorW = globalMaxX + floorPad*2, floorD = globalMaxZ + floorPad*2;
@@ -7085,6 +7132,16 @@ function _p3dBuildRotateScene() {
 
   if (_p3dControls) _p3dControls.target.set(globalMaxX/2, 0, globalMaxZ/2);
 
+  // Helper — offset G26-32 biar bagian DEPAN sejajar sama G1-25 (pola sama kaya di render 2D)
+  function _gFrontAlignOffset(letter, segsArr, seg) {
+    if (letter !== 'G' || seg.rowFrom < 26) return 0;
+    var mainSeg = segsArr.filter(function(s){ return s.rowFrom < 26; })[0];
+    var mainDepth = mainSeg ? mainSeg.depth : seg.depth;
+    return Math.max(0, mainDepth - seg.depth);
+  }
+
+  var shadowInstances = []; // {x, z, depth} — bayangan gelap persis di footprint bawah rak
+
   LAYOUT_ORDER.forEach(function(letter) {
     var segs = groups.filter(function(g){return g.bin===letter;});
     var origin = Math.min.apply(null, segs.map(function(s){return s.rowFrom;}));
@@ -7113,11 +7170,25 @@ function _p3dBuildRotateScene() {
       var seg = p.seg;
       var ny = seg.depth, nz = seg.level;
       var iBackAlign = (letter === 'I' && seg.rowFrom >= 28);
-      var zBaseEff = iBackAlign ? (zBase + (rackDepth - ny)) : zBase;
+      var zBaseEff = iBackAlign ? (zBase + (rackDepth - ny)) : (zBase + _gFrontAlignOffset(letter, segs, seg));
       postData.push({ x: finalX,   zBase: zBaseEff, depth: ny, levels: nz });
       postData.push({ x: finalX+1, zBase: zBaseEff, depth: ny, levels: nz });
+      shadowInstances.push({ x: finalX, z: zBaseEff, depth: ny });
     });
   });
+
+  // ── Bayangan gelap persis di bawah tiap kolom rak (bukan seluruh lantai) ──
+  if (shadowInstances.length) {
+    var shadowMat = new THREE.MeshBasicMaterial({ color: 0x4b5058, side: THREE.DoubleSide, transparent: true, opacity: 0.55 });
+    var shadowGeo = new THREE.PlaneGeometry(1, 1);
+    var shadowQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI/2, 0, 0));
+    var shadowMesh = new THREE.InstancedMesh(shadowGeo, shadowMat, shadowInstances.length);
+    shadowInstances.forEach(function(si, i) {
+      mtx.compose(new THREE.Vector3(si.x + 0.5, 0.004, si.z + si.depth/2), shadowQuat, new THREE.Vector3(1, si.depth, 1));
+      shadowMesh.setMatrixAt(i, mtx);
+    });
+    floorGroup.add(shadowMesh);
+  }
 
   // ── Ambil data stok ASLI (binMap), render kotak isi pakai warna asli p3dColorForItem ──
   var binMap = {};
@@ -7147,7 +7218,7 @@ function _p3dBuildRotateScene() {
       var finalX = xi + xGapOffset + iShift;
       var ny = seg.depth, nz = seg.level;
       var iBackAlign = (letter === 'I' && seg.rowFrom >= 28);
-      var zBaseEff = iBackAlign ? (zBase + (rackDepth - ny)) : zBase;
+      var zBaseEff = iBackAlign ? (zBase + (rackDepth - ny)) : (zBase + _gFrontAlignOffset(letter, segs, seg));
       var binCode = letter + rowNum;
       var info = binMap[binCode];
       if (!info || !info.items.length) continue;
@@ -7201,7 +7272,7 @@ function _p3dBuildRotateScene() {
       if (letter === 'G' && prevSegB && prevSegB !== seg2) xGapOffsetB += 3;
       prevSegB = seg2;
       var iBackAlignB = (letter === 'I' && seg2.rowFrom >= 28);
-      var zBaseEffB = iBackAlignB ? (zBase + (rackDepthB - seg2.depth)) : zBase;
+      var zBaseEffB = iBackAlignB ? (zBase + (rackDepthB - seg2.depth)) : (zBase + _gFrontAlignOffset(letter, segs, seg2));
       posB.push({ sx: xi2 + xGapOffsetB, depth: seg2.depth, zBaseEff: zBaseEffB });
     }
     posB.forEach(function(p) {
@@ -7240,7 +7311,7 @@ function _p3dBuildRotateScene() {
       if (letter === 'G' && prevSegB && prevSegB !== seg2) xGapOffsetB += 3;
       prevSegB = seg2;
       var iBackAlignB = (letter === 'I' && seg2.rowFrom >= 28);
-      var zBaseEffB = iBackAlignB ? (zBase + (rackDepthB - seg2.depth)) : zBase;
+      var zBaseEffB = iBackAlignB ? (zBase + (rackDepthB - seg2.depth)) : (zBase + _gFrontAlignOffset(letter, segs, seg2));
       posB.push({ sx: xi2 + xGapOffsetB, depth: seg2.depth, zBaseEff: zBaseEffB });
     }
     posB.forEach(function(p) {
