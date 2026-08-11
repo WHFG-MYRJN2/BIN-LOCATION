@@ -1,4 +1,4 @@
-var CACHE = 'binloc-v1.1.2';
+var CACHE = 'binloc-v1.1.3';
 var ASSETS = [
   'index.html',
   'operator.html',
