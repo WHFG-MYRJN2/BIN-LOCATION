@@ -7009,43 +7009,25 @@ function _p3dBuildRotateScene() {
   floorMesh.position.set(globalMaxX/2, 0, globalMaxZ/2);
   floorGroup.add(floorMesh);
 
-  // ── Garis tepi luar (biru tua) — pendekatan "skyline": nempel PERSIS ke ujung rak terlebar
-  // sejauh ini (gak nyusut ke dalam buat blok yang lebih sempit di tengah), transisi/step SELALU
-  // di titik tengah gang antar-blok (aman, gak pernah motong racking) ──
-  var runningMaxX = 0;
-  var outlinePad = 1.5; // jarak aman hanya di sisi LUAR (kiri & belakang), bukan sisi yang nempel rak
+  // ── Garis tepi luar (biru tua) — koordinat FIXED hasil tuning manual Bos lewat editor
+  // (bukan hasil algoritma skyline lagi) ──
   var outlineCorners = [
-    { x: -outlinePad, z: -outlinePad },
-    { x: 0, z: -outlinePad },
-    { x: 0, z: 0 }
+    { x: -3, z: -1 },
+    { x: 0, z: -1 },
+    { x: 0, z: -1 },
+    { x: 28, z: -1 },
+    { x: 28, z: 31.2 },
+    { x: 36.5, z: 31.2 },
+    { x: 36.5, z: 42 },
+    { x: 52, z: 42 },
+    { x: 52, z: 51.6 },
+    { x: -3, z: 51.6 }
   ];
-  LAYOUT_ORDER.forEach(function(l, idx) {
-    var s = groups.filter(function(g){return g.bin===l;});
-    var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
-    var nxRaw = Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;}));
-    var extraL = (l === 'G' ? (s.length-1)*3 : 0) + (l === 'I' ? 9 : 0);
-    var myMaxX = nxRaw + extraL;
-    if (myMaxX > runningMaxX) {
-      var stepZ;
-      if (idx === 0) {
-        stepZ = 0;
-      } else {
-        var prevL = LAYOUT_ORDER[idx-1];
-        var prevEnd = rackMeta[prevL].start + maxDepth(prevL);
-        stepZ = (prevEnd + rackMeta[l].start) / 2; // tengah gang — dijamin gak nabrak racking manapun
-      }
-      outlineCorners.push({ x: runningMaxX, z: stepZ });
-      outlineCorners.push({ x: myMaxX, z: stepZ });
-      runningMaxX = myMaxX;
-    }
-  });
-  outlineCorners.push({ x: runningMaxX, z: globalMaxZ });
-  outlineCorners.push({ x: runningMaxX, z: globalMaxZ + outlinePad });
-  outlineCorners.push({ x: -outlinePad, z: globalMaxZ + outlinePad });
-  outlineCorners.push({ x: -outlinePad, z: -outlinePad });
   var outlineLinePts = [];
-  for (var oi = 0; oi < outlineCorners.length - 1; oi++) {
-    outlineLinePts.push(outlineCorners[oi].x, 0.02, outlineCorners[oi].z, outlineCorners[oi+1].x, 0.02, outlineCorners[oi+1].z);
+  for (var oi = 0; oi < outlineCorners.length; oi++) {
+    var ocA = outlineCorners[oi];
+    var ocB = outlineCorners[(oi + 1) % outlineCorners.length]; // tutup polygon (balik ke titik pertama)
+    outlineLinePts.push(ocA.x, 0.02, ocA.z, ocB.x, 0.02, ocB.z);
   }
   var outlineGeo = new THREE.BufferGeometry();
   outlineGeo.setAttribute('position', new THREE.Float32BufferAttribute(outlineLinePts, 3));
@@ -7072,170 +7054,44 @@ function _p3dBuildRotateScene() {
 
   var walkMat = new THREE.MeshBasicMaterial({ color: 0x127453, side: THREE.DoubleSide });
   var walkBorderMat = new THREE.LineBasicMaterial({ color: 0xfacc15 });
-  var walkW = 0.6;
   function addWalkStrip(cx, cz, w, d) {
     var g = new THREE.PlaneGeometry(w, d);
     var mesh = new THREE.Mesh(g, walkMat);
     mesh.rotation.x = -Math.PI/2;
     mesh.position.set(cx, 0.005, cz);
     floorGroup.add(mesh);
-  }
-  var WALK_SKIP = {
-    A: ['belakang','kanan'],
-    B: ['belakang'], C: ['belakang'], D: ['belakang'], E: ['belakang'], F: ['belakang'],
-    G: ['belakang','kanan'],
-    H: ['belakang','kanan'],
-    I: ['belakang','kanan','kiri']
-  };
-  LAYOUT_ORDER.forEach(function(letter) {
-    var s = groups.filter(function(g){return g.bin===letter;});
-    var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
-    var nxRack = Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;})) + (letter==='G' ? (s.length-1)*3 : 0);
-    var m = rackMeta[letter];
-    var iShiftW = (letter === 'I') ? 9 : 0;
-    var wx0 = -walkW + iShiftW, wx1 = nxRack + walkW + iShiftW;
-    var wz0 = m.start - walkW, wz1 = m.start + m.depth + walkW;
-    var skip = WALK_SKIP[letter] || [];
-    var isSecondOfPair = (letter==='A' || letter==='C' || letter==='E' || letter==='G');
-    var depanZ = isSecondOfPair ? (wz1-walkW/2) : (wz0+walkW/2);
-    var belakangZ = isSecondOfPair ? (wz0+walkW/2) : (wz1-walkW/2);
-    var iX1, iX2, iX3;
-    if (letter === 'I') {
-      iX1 = -walkW; iX2 = 31 + iShiftW; iX3 = 43 + walkW + iShiftW;
-      var frontZ1 = m.start - walkW/2;
-      var frontZ2 = m.start + 2 - walkW/2;
-      if (skip.indexOf('depan') === -1) {
-        addWalkStrip((iX1+iX2)/2, frontZ1, iX2-iX1, walkW);
-        addWalkStrip((iX2+iX3)/2, frontZ2, iX3-iX2, walkW);
-      }
-      if (skip.indexOf('belakang') === -1) addWalkStrip((wx0+wx1)/2, belakangZ, wx1-wx0, walkW);
-    } else {
-      if (skip.indexOf('depan') === -1) addWalkStrip((wx0+wx1)/2, depanZ, wx1-wx0, walkW);
-      if (skip.indexOf('belakang') === -1) addWalkStrip((wx0+wx1)/2, belakangZ, wx1-wx0, walkW);
-    }
-    var zDepanLine = isSecondOfPair ? wz1 : wz0;
-    var zBelakangLine = isSecondOfPair ? wz0 : wz1;
-
-    // ── Bin tambahan (T1-T8, "DEPAN BLOK A-H") — ditaruh di LUAR jalur pejalan kaki,
-    // jalurnya sendiri yang jadi jarak/pemisah antara bin tambahan dgn rak asli ──
-    var T_BIN_LETTER_IDX = {A:1,B:2,C:3,D:4,E:5,F:6,G:7,H:8};
-    if (T_BIN_LETTER_IDX[letter]) {
-      var tBinDepth = 1.4;
-      var tZ = isSecondOfPair ? (wz1 + walkW/2 + tBinDepth/2) : (wz0 - walkW/2 - tBinDepth/2);
-      var tBinW = nxRack;
-      var tBinMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(tBinW, 1.1, tBinDepth),
-        new THREE.MeshStandardMaterial({ color: 0x92703a, roughness: 0.75 })
-      );
-      tBinMesh.position.set(nxRack/2 + iShiftW, 0.55, tZ);
-      framesGroup.add(tBinMesh);
-      var tLabel = _p3dMakeLabelSprite('T' + T_BIN_LETTER_IDX[letter], { canvasW: 110, canvasH: 56, fontPx: 26, scale: [2.2, 1.1, 1], bg: 'rgba(120,80,30,0.85)', border: 'rgba(255,255,255,0.6)' });
-      tLabel.position.set(nxRack/2 + iShiftW, 1.6, tZ);
-      labelsGroup.add(tLabel);
-    }
-    var bp = [];
-    if (letter === 'I') {
-      if (skip.indexOf('depan') === -1) {
-        bp.push(iX1,0.01,m.start,   iX2,0.01,m.start);
-        bp.push(iX2,0.01,m.start,   iX2,0.01,m.start+2);
-        bp.push(iX2,0.01,m.start+2, iX3,0.01,m.start+2);
-      }
-      if (skip.indexOf('belakang') === -1) bp.push(wx0,0.01,zBelakangLine, wx1,0.01,zBelakangLine);
-    } else {
-      if (skip.indexOf('depan') === -1)    bp.push(wx0,0.01,zDepanLine,    wx1,0.01,zDepanLine);
-      if (skip.indexOf('belakang') === -1) bp.push(wx0,0.01,zBelakangLine, wx1,0.01,zBelakangLine);
-    }
-    if (bp.length) {
-      var gL = new THREE.BufferGeometry();
-      gL.setAttribute('position', new THREE.Float32BufferAttribute(bp, 3));
-      floorGroup.add(new THREE.LineSegments(gL, walkBorderMat));
-    }
-  });
-
-  function nxOf(letter) {
-    var s = groups.filter(function(g){return g.bin===letter;});
-    if (!s.length) return 0;
-    var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
-    return Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;})) + (letter==='G' ? (s.length-1)*3 : 0);
-  }
-  function addKiriKanan(letters, skipKiri, skipKanan) {
-    letters = letters.filter(function(l){ return rackMeta[l]; });
-    if (!letters.length) return;
-    var maxNx = Math.max.apply(null, letters.map(nxOf));
-    var zStart = rackMeta[letters[0]].start - walkW;
-    var lastM = rackMeta[letters[letters.length-1]];
-    var zEnd = lastM.start + lastM.depth + walkW;
-    var wx0 = -walkW, wx1 = maxNx + walkW;
-    if (!skipKiri) {
-      addWalkStrip(wx0+walkW/2, (zStart+zEnd)/2, walkW, zEnd-zStart);
-      var g1 = new THREE.BufferGeometry();
-      g1.setAttribute('position', new THREE.Float32BufferAttribute([wx0,0.01,zStart, wx0,0.01,zEnd], 3));
-      floorGroup.add(new THREE.LineSegments(g1, walkBorderMat));
-    }
-    if (!skipKanan) {
-      addWalkStrip(wx1-walkW/2, (zStart+zEnd)/2, walkW, zEnd-zStart);
-      var g2 = new THREE.BufferGeometry();
-      g2.setAttribute('position', new THREE.Float32BufferAttribute([wx1,0.01,zStart, wx1,0.01,zEnd], 3));
-      floorGroup.add(new THREE.LineSegments(g2, walkBorderMat));
-    }
-  }
-  addKiriKanan(['A'], false, true);
-  addKiriKanan(['B','C'], false, false);
-  addKiriKanan(['D','E'], false, false);
-  addKiriKanan(['F','G'], false, true);
-  addKiriKanan(['F'], true, false);
-  addKiriKanan(['G'], true, false);
-  addKiriKanan(['H'], false, true);
-  addKiriKanan(['I'], true, true);
-
-  // ── Sambungan pejalan kaki tambahan — biar gak keputus antar blok ──
-  // Sisi "row25" (kanan B-F): nyambung terus dari A sampai ujung H, satu garis lurus.
-  var spineX25 = 25;
-  var spineZ0 = rackMeta['A'].start - walkW;
-  var spineZ1H = rackMeta['H'].start + maxDepth('H') + walkW;
-  addWalkStrip(spineX25, (spineZ0+spineZ1H)/2, walkW, spineZ1H-spineZ0);
-  var spine25Pts = [
-    spineX25-walkW/2,0.01,spineZ0, spineX25-walkW/2,0.01,spineZ1H,
-    spineX25+walkW/2,0.01,spineZ0, spineX25+walkW/2,0.01,spineZ1H
-  ];
-  var spine25Geo = new THREE.BufferGeometry();
-  spine25Geo.setAttribute('position', new THREE.Float32BufferAttribute(spine25Pts, 3));
-  floorGroup.add(new THREE.LineSegments(spine25Geo, walkBorderMat));
-
-  // Sisi "row1" (kiri, X≈0): nyambung dari A terus sampai I (I26 udah disejajarkan ke H35 lewat shift +9).
-  var spineX1 = 0;
-  var spineZ1I = rackMeta['I'].start + maxDepth('I') + walkW;
-  addWalkStrip(spineX1, (spineZ0+spineZ1I)/2, walkW, spineZ1I-spineZ0);
-  var spine1Pts = [
-    spineX1-walkW/2,0.01,spineZ0, spineX1-walkW/2,0.01,spineZ1I,
-    spineX1+walkW/2,0.01,spineZ0, spineX1+walkW/2,0.01,spineZ1I
-  ];
-  var spine1Geo = new THREE.BufferGeometry();
-  spine1Geo.setAttribute('position', new THREE.Float32BufferAttribute(spine1Pts, 3));
-  floorGroup.add(new THREE.LineSegments(spine1Geo, walkBorderMat));
-
-  var gSeg1 = groups.filter(function(x){return x.bin==='G' && x.rowTo===25;})[0];
-  var gSeg2 = groups.filter(function(x){return x.bin==='G' && x.rowFrom===26;})[0];
-  if (gSeg1 && gSeg2 && rackMeta['G']) {
-    var gm = rackMeta['G'];
-    var gEdgeNear = 25 + walkW/2;
-    var gEdgeFar  = 25 + 3 - walkW/2;
-    addWalkStrip(gEdgeNear, gm.start+gm.depth/2, walkW, gm.depth);
-    addWalkStrip(gEdgeFar,  gm.start+gm.depth/2, walkW, gm.depth);
-    var gBp = [
-      gEdgeNear-walkW/2,0.01,gm.start, gEdgeNear-walkW/2,0.01,gm.start+gm.depth,
-      gEdgeNear+walkW/2,0.01,gm.start, gEdgeNear+walkW/2,0.01,gm.start+gm.depth,
-      gEdgeFar-walkW/2,0.01,gm.start,  gEdgeFar-walkW/2,0.01,gm.start+gm.depth,
-      gEdgeFar+walkW/2,0.01,gm.start,  gEdgeFar+walkW/2,0.01,gm.start+gm.depth
+    var bx0=cx-w/2, bx1=cx+w/2, bz0=cz-d/2, bz1=cz+d/2;
+    var bPts = [
+      bx0,0.01,bz0, bx1,0.01,bz0,
+      bx1,0.01,bz0, bx1,0.01,bz1,
+      bx1,0.01,bz1, bx0,0.01,bz1,
+      bx0,0.01,bz1, bx0,0.01,bz0
     ];
-    var gLg = new THREE.BufferGeometry();
-    gLg.setAttribute('position', new THREE.Float32BufferAttribute(gBp, 3));
-    floorGroup.add(new THREE.LineSegments(gLg, walkBorderMat));
+    var bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.Float32BufferAttribute(bPts, 3));
+    floorGroup.add(new THREE.LineSegments(bg, walkBorderMat));
   }
 
-  // ── Bin tambahan T9-T36 — posisi BEST-EFFORT dari nama (bukan koordinat pasti,
-  // belum ada data XYZ persis buat ini). Dikelompokkan berdasar clue nama masing-masing. ──
-  function _p3dAddTBin(label, cx, cz, w, d, capText) {
+  // ── Pejalan kaki — koordinat FIXED hasil tuning manual Bos lewat editor ──
+  var WALK_STRIPS = [
+    { cx:14, cz:2.3000000000000003, w:28, d:0.6 },
+    { cx:12.5, cz:6.7, w:26.200000000000003, d:0.6 },
+    { cx:12.5, cz:12.499999999999998, w:26.200000000000003, d:0.6 },
+    { cx:12.5, cz:16.9, w:26.200000000000003, d:0.6 },
+    { cx:12.5, cz:22.7, w:26.200000000000003, d:0.6 },
+    { cx:12.5, cz:27.099999999999998, w:26.200000000000003, d:0.6 },
+    { cx:18, cz:33.9, w:36.6, d:0.6 },
+    { cx:18, cz:38.29999999999999, w:36.6, d:0.6 },
+    { cx:19.7, cz:45.3, w:40.6, d:0.6 },
+    { cx:46, cz:47.3, w:12, d:0.6 },
+    { cx:25.4, cz:20.6, w:0.6, d:36 },
+    { cx:-0.4, cz:23.5, w:0.6, d:43 },
+    { cx:40.5, cz:46, w:1, d:2 }
+  ];
+  WALK_STRIPS.forEach(function(s) { addWalkStrip(s.cx, s.cz, s.w, s.d); });
+
+  // ── Bin tambahan T1-T36 — koordinat FIXED hasil tuning manual Bos lewat editor ──
+  function _p3dAddTBin(label, cx, cz, w, d) {
     var tMesh = new THREE.Mesh(
       new THREE.BoxGeometry(w, 1.0, d),
       new THREE.MeshStandardMaterial({ color: 0xb08968, roughness: 0.8, transparent:true, opacity:0.85 })
@@ -7246,55 +7102,45 @@ function _p3dBuildRotateScene() {
     lbl.position.set(cx, 1.3, cz);
     labelsGroup.add(lbl);
   }
-
-  // T9-T15: KERANGKENG 1-7 (cap 5) — dijejer di gang lebar setelah G (sebelum H)
-  if (rackMeta['G'] && rackMeta['H']) {
-    var kerZ = (rackMeta['G'].start + maxDepth('G') + rackMeta['H'].start) / 2;
-    for (var ki = 0; ki < 7; ki++) {
-      _p3dAddTBin('T' + (9+ki), 3 + ki*3.2, kerZ, 2.6, 1.2, '5');
-    }
-  }
-  // T16: SAMPING BLOK G (cap 3) — di samping kanan G (row angka besar)
-  if (rackMeta['G']) {
-    var gWidth = (function(){ var s=groups.filter(function(g){return g.bin==='G';}); var o=Math.min.apply(null,s.map(function(x){return x.rowFrom;})); return Math.max.apply(null,s.map(function(x){return x.rowTo-o+1;})) + (s.length-1)*3; })();
-    _p3dAddTBin('T16', gWidth + 2, rackMeta['G'].start + maxDepth('G')/2, 1.2, maxDepth('G'), '3');
-  }
-  // T17-19: DEPAN KERANGKENG G-F / D-E / B-C (cap 3) — di gang sempit (BACK_GAP) antar pasangan blok
-  var kerangkengPairs = [['F','G','T17'], ['D','E','T18'], ['B','C','T19']];
-  kerangkengPairs.forEach(function(pair) {
-    var l1 = pair[0], l2 = pair[1], lbl = pair[2];
-    if (rackMeta[l1] && rackMeta[l2]) {
-      var gapZ = (rackMeta[l1].start + maxDepth(l1) + rackMeta[l2].start) / 2;
-      _p3dAddTBin(lbl, 12, gapZ, 3, 1.0, '3');
-    }
-  });
-  // T20-22: DEPAN ROLLING DOOR D-E / F-G / B-C (cap 3) — sisi row1 (X≈0) dari gang yang sama
-  var rollingDoorPairs = [['D','E','T20'], ['F','G','T21'], ['B','C','T22']];
-  rollingDoorPairs.forEach(function(pair) {
-    var l1 = pair[0], l2 = pair[1], lbl = pair[2];
-    if (rackMeta[l1] && rackMeta[l2]) {
-      var gapZ2 = (rackMeta[l1].start + maxDepth(l1) + rackMeta[l2].start) / 2;
-      _p3dAddTBin(lbl, -3, gapZ2, 2, 1.0, '3');
-    }
-  });
-  // T23-T31: HABIS LORONG BLOK I 1-9 (cap 5) — dijejer sepanjang lorong di sisi I (X lebih besar dari I)
-  if (rackMeta['I']) {
-    var iMaxX = (function(){ var s=groups.filter(function(g){return g.bin==='I';}); var o=Math.min.apply(null,s.map(function(x){return x.rowFrom;})); return Math.max.apply(null,s.map(function(x){return x.rowTo-o+1;})) + 9; })();
-    var iZ0 = rackMeta['I'].start, iZ1 = rackMeta['I'].start + maxDepth('I');
-    for (var hi = 0; hi < 9; hi++) {
-      var hz = iZ0 + (iZ1-iZ0) * (hi+0.5)/9;
-      _p3dAddTBin('T'+(23+hi), iMaxX + 2.5, hz, 1.6, 1.0, '5');
-    }
-  }
-  // T32-T36: KERANGKENG BLOK I 1-5 (cap 4) — dijejer lanjutan setelah lorong I, agak lebih jauh
-  if (rackMeta['I']) {
-    var iMaxX2 = (function(){ var s=groups.filter(function(g){return g.bin==='I';}); var o=Math.min.apply(null,s.map(function(x){return x.rowFrom;})); return Math.max.apply(null,s.map(function(x){return x.rowTo-o+1;})) + 9; })();
-    var iZ0b = rackMeta['I'].start, iZ1b = rackMeta['I'].start + maxDepth('I');
-    for (var ii = 0; ii < 5; ii++) {
-      var iz = iZ0b + (iZ1b-iZ0b) * (ii+0.5)/5;
-      _p3dAddTBin('T'+(32+ii), iMaxX2 + 5, iz, 1.4, 1.0, '4');
-    }
-  }
+  var T_BIN_POSITIONS = [
+    { label:"T1", cx:12.5, cz:3.2, w:25, d:1 },
+    { label:"T2", cx:12.5, cz:5.8, w:25, d:1 },
+    { label:"T3", cx:12.5, cz:13.4, w:25, d:1 },
+    { label:"T4", cx:12.5, cz:16, w:25, d:1 },
+    { label:"T5", cx:12.5, cz:23.6, w:25, d:1 },
+    { label:"T6", cx:12.5, cz:26.2, w:25, d:1 },
+    { label:"T7", cx:12.5, cz:34.8, w:25, d:1 },
+    { label:"T8", cx:12.5, cz:37.4, w:25, d:1 },
+    { label:"T9", cx:27.25, cz:4.2, w:1, d:3 },
+    { label:"T10", cx:27.25, cz:8, w:1, d:4 },
+    { label:"T11", cx:27.25, cz:12.3, w:1, d:4 },
+    { label:"T12", cx:27.25, cz:16.6, w:1, d:4 },
+    { label:"T13", cx:27.25, cz:20.9, w:1, d:4 },
+    { label:"T14", cx:27.25, cz:25.2, w:1, d:4 },
+    { label:"T15", cx:27.25, cz:29.5, w:1, d:4 },
+    { label:"T16", cx:27.25, cz:32.7, w:1, d:2 },
+    { label:"T17", cx:25.6, cz:30, w:1, d:3 },
+    { label:"T18", cx:25.6, cz:19.8, w:1, d:3 },
+    { label:"T19", cx:25.6, cz:9.6, w:1, d:3 },
+    { label:"T20", cx:-0.5, cz:19.8, w:1, d:3 },
+    { label:"T21", cx:-0.5, cz:30, w:1, d:3 },
+    { label:"T22", cx:-0.5, cz:39.6, w:1, d:2 },
+    { label:"T23", cx:2, cz:41.2, w:4, d:1 },
+    { label:"T24", cx:6.3, cz:41.2, w:4, d:1 },
+    { label:"T25", cx:10.6, cz:41.2, w:4, d:1 },
+    { label:"T26", cx:14.9, cz:41.2, w:4, d:1 },
+    { label:"T27", cx:19.2, cz:41.2, w:4, d:1 },
+    { label:"T28", cx:23.5, cz:41.2, w:4, d:1 },
+    { label:"T29", cx:27.8, cz:41.2, w:4, d:1 },
+    { label:"T30", cx:32.1, cz:41.2, w:4, d:1 },
+    { label:"T31", cx:2, cz:42.6, w:4, d:1 },
+    { label:"T32", cx:37.3, cz:42.8, w:2, d:1 },
+    { label:"T33", cx:41.6, cz:42.8, w:2, d:1 },
+    { label:"T34", cx:44.6, cz:42.8, w:2, d:1 },
+    { label:"T35", cx:47.8, cz:42.8, w:2, d:1 },
+    { label:"T36", cx:50.9, cz:42.8, w:2, d:1 }
+  ];
+  T_BIN_POSITIONS.forEach(function(t) { _p3dAddTBin(t.label, t.cx, t.cz, t.w, t.d); });
 
   if (_p3dControls) _p3dControls.target.set(globalMaxX/2, 0, globalMaxZ/2);
 
