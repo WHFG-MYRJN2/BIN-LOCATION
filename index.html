@@ -1400,10 +1400,9 @@ input:focus, select:focus {
           <input class="field-input" id="bin-tujuan-input" placeholder="cth: A1, B12..." style="text-transform:uppercase"
             oninput="this.value=this.value.toUpperCase(); state.binTujuan=normalizeBinLoc(this.value.trim()); this.value=state.binTujuan||this.value; updateSubmitState()">
         </div>
-        <!-- Mode: Lain-lain -->
+        <!-- Mode: Lain-lain — wajib pilih dari daftar Bin Tambahan (T1-T36), gak bisa ngetik bebas -->
         <div id="tujuan-lainlain-wrap" style="display:none">
-          <input class="field-input" id="bin-tujuan-custom" placeholder="cth: Lorong A, Area Loading, Staging..."
-            oninput="state.binTujuan=this.value.trim(); updateSubmitState()">
+          <div id="tujuan-lainlain-list" style="display:flex;flex-direction:column;gap:8px;max-height:280px;overflow-y:auto"></div>
         </div>
       </div>
     </div>
@@ -1997,7 +1996,6 @@ function resetState() {
   _qtEl.style.cursor = '';
   document.getElementById('f-keterangan').value = '';
   document.getElementById('bin-tujuan-input').value = '';
-  document.getElementById('bin-tujuan-custom').value = '';
   setTujuanMode('racking');
   document.getElementById('std-info').style.display = 'none';
   document.getElementById('std-warn').style.display = 'none';
@@ -2346,7 +2344,29 @@ function setTujuanMode(mode) {
   // Reset nilai tujuan saat ganti mode
   state.binTujuan = null;
   document.getElementById('bin-tujuan-input').value  = '';
-  document.getElementById('bin-tujuan-custom').value = '';
+  if (mode === 'lainlain') renderTujuanLainlainList();
+  updateSubmitState();
+}
+
+function renderTujuanLainlainList() {
+  var listEl = document.getElementById('tujuan-lainlain-list');
+  var codes = Object.keys(T_BIN_NAMES).sort(function(a,b){ return parseInt(a.slice(1)) - parseInt(b.slice(1)); });
+  listEl.innerHTML = codes.map(function(code) {
+    var meta = T_BIN_NAMES[code];
+    return '<div onclick="selectTujuanLainlain(\''+code+'\')" id="tujuan-lainlain-opt-'+code+'" style="'
+      + 'background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;'
+      + 'padding:12px 14px;cursor:pointer;transition:border-color .15s">'
+      + '<div style="font-size:13px;font-weight:800;color:#3b82f6">📍 ' + escHtml(meta.name) + ' <span style="color:var(--muted);font-weight:600;font-size:10px">(' + code + ')</span></div>'
+      + '<div style="font-size:11px;color:var(--muted);margin-top:2px">Kapasitas ' + meta.cap + ' plt</div>'
+      + '</div>';
+  }).join('');
+}
+
+function selectTujuanLainlain(code) {
+  state.binTujuan = code;
+  document.querySelectorAll('#tujuan-lainlain-list > div').forEach(function(el) { el.style.borderColor = ''; });
+  var sel = document.getElementById('tujuan-lainlain-opt-' + code);
+  if (sel) sel.style.borderColor = '#3b82f6';
   updateSubmitState();
 }
 
@@ -2390,7 +2410,6 @@ function pilihAksi(aksi) {
     document.getElementById('bin-tujuan-wrap').classList.remove('show');
     state.binTujuan = null;
     document.getElementById('bin-tujuan-input').value = '';
-    document.getElementById('bin-tujuan-custom').value = '';
   }
   updateSubmitState();
 }
