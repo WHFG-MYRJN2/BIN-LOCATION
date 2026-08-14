@@ -7156,7 +7156,12 @@ async function _p3dInitRotateView() {
   _p3dControls.enableDamping = true;
   _p3dControls.minPolarAngle = 0.05;
   _p3dControls.maxPolarAngle = Math.PI * 0.5; // izinkan persis 90° (horizontal) buat preset front/back/left/right
-  _p3dControls.addEventListener('start', function() { _p3dViewAnim = null; });
+  _p3dControls.addEventListener('start', function() {
+    // Jangan batalin animasi yang BARU aja di-set (<150ms) — biar gak ke-cancel sendiri
+    // oleh event 'start' yang nyusul dari klik/tap yang sama (drag palsu).
+    if (_p3dViewAnim && (performance.now() - _p3dViewAnim.start) < 150) return;
+    _p3dViewAnim = null;
+  });
   _p3dScene.add(new THREE.AmbientLight(0xffffff, 0.8));
   var dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
   dirLight.position.set(30,50,20);
