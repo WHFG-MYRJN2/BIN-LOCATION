@@ -1297,7 +1297,7 @@ input:focus, select:focus {
         <!-- Tooltip hover — muncul deket kursor pas nunjuk label blok -->
         <div id="peta3d-hover-tooltip" style="display:none;position:fixed;z-index:20;background:rgba(15,23,42,.92);color:#facc15;font-size:11px;font-weight:700;padding:6px 10px;border-radius:8px;pointer-events:none;white-space:nowrap;"></div>
         <!-- Popup detail blok — muncul pas klik label -->
-        <div id="peta3d-rack-popup" style="display:none;position:absolute;left:10px;bottom:10px;z-index:15;background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:14px 16px;width:min(280px, calc(100% - 20px));box-shadow:0 8px 24px rgba(0,0,0,.18);touch-action:auto;pointer-events:auto;"></div>
+        <div id="peta3d-rack-popup" style="display:none;position:absolute;left:10px;bottom:10px;z-index:1000;background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:14px 16px;width:min(280px, calc(100% - 20px));box-shadow:0 8px 24px rgba(0,0,0,.18);touch-action:auto;pointer-events:auto;"></div>
         <div id="peta3d-viewcube" style="position:absolute;top:8px;right:8px;display:grid;grid-template-columns:repeat(3,26px) 22px;grid-template-rows:repeat(3,26px);gap:2px;z-index:5;background:rgba(255,255,255,.55);padding:4px;border-radius:10px;backdrop-filter:blur(2px);">
           <div></div>
           <button onclick="if(window.peta3DSetPresetView)peta3DSetPresetView('top')" style="grid-column:2;grid-row:1;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--muted);font-size:9px;font-weight:800;cursor:pointer;">TOP</button>
@@ -6803,6 +6803,7 @@ var _p3dSelectedLetter = null;
 var _p3dRackInfo = {}; // { A: {x0,x1,z0,z1,segs}, ... } — bounding box & metadata per blok, buat zoom & popup
 var _p3dRaycaster, _p3dPointer, _p3dEventsBound = false;
 var _p3dHitboxGroup = null; // kotak invisible per blok — target klik/hover yang reliable
+var _p3dSceneSpan = { x: 20, z: 15 }; // total lebar/dalam scene — dipakai hitung rasio zoom-in per blok
 var _p3dBinMapRef = {}; // referensi binMap terbaru — dipakai popup detail blok
 var _p3dBinCapRef = {}; // { binCode: capacity } — kapasitas slot per-bin (depth × level), buat hover detail
 var _p3dViewAnim = null; // { fromTarget, toTarget, fromSph, toSph, start, dur } — animasi smooth pindah sudut kamera
@@ -6841,12 +6842,16 @@ function _p3dSetHighlight(letter) {
 }
 
 // ── Zoom kamera ke satu blok rak, sedikit dari sudut iso biar keliatan 3 sisinya ──
+// PENTING: kamera scene ini ORTHOGRAPHIC — "zoom" ditentukan oleh camera.zoom (frustum size),
+// BUKAN jarak posisi kamera (geser posisi doang cuma ganti sudut pandang, gak ngezoom apa-apa)!
 function _p3dZoomToRack(letter) {
   var info = _p3dRackInfo[letter];
   if (!info || !_p3dCamera || !_p3dControls) return;
   var target = { x: info.cx, y: Math.min(info.maxLevel/2, 5), z: info.cz };
-  var span = Math.max(info.x1 - info.x0, info.z1 - info.z0, info.maxLevel, 6);
-  var dist = span * 1.6;
+  var rackSpan  = Math.max(info.x1 - info.x0, info.z1 - info.z0, info.maxLevel, 4);
+  var totalSpan = Math.max(_p3dSceneSpan.x, _p3dSceneSpan.z, 20);
+  var toZoom = Math.min(9, Math.max(2, (totalSpan / rackSpan) * 0.55)); // rasio blok vs keseluruhan scene
+  var dist = rackSpan * 1.6 + 20; // posisi kamera cuma buat sudut pandang & hindarin clipping, bukan zoom
   var dir = { x: 0.75, y: 0.6, z: 0.75 };
   var len = Math.sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
   var fromTarget = _p3dControls.target.clone();
@@ -6855,6 +6860,7 @@ function _p3dZoomToRack(letter) {
   _p3dViewAnim = {
     fromTarget: fromTarget, toTarget: target,
     fromSph: _p3dToSpherical(fromOffset), toSph: _p3dToSpherical(toOffset),
+    fromZoom: _p3dCamera.zoom, toZoom: toZoom,
     start: performance.now(), dur: 550
   };
 }
@@ -6885,7 +6891,7 @@ function _p3dShowBinPopup(binCode, letter) {
   box.innerHTML =
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
       '<div style="font-size:17px;font-weight:900;color:#1e3a8a;">📍 ' + binCode + '</div>' +
-      '<div onclick="_p3dClosePopup()" onpointerdown="event.stopPropagation()" style="cursor:pointer;font-size:20px;color:var(--muted);line-height:1;padding:2px 6px;">✕</div>' +
+      '<div onclick="event.stopPropagation(); _p3dClosePopup();" style="cursor:pointer;font-size:22px;color:var(--muted);line-height:1;padding:6px 10px;">✕</div>' +
     '</div>' +
     (cap ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Kapasitas: ' + used + '/' + cap + ' plt</div>' : '') +
     '<div style="max-height:200px;overflow-y:auto;">' + itemsHtml + '</div>';
@@ -6914,7 +6920,7 @@ function _p3dShowRackPopup(letter) {
   box.innerHTML =
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
       '<div style="font-size:18px;font-weight:900;color:#1e3a8a;">📦 BLOK ' + letter + '</div>' +
-      '<div onclick="_p3dDeselectRack()" onpointerdown="event.stopPropagation()" style="cursor:pointer;font-size:20px;color:var(--muted);line-height:1;padding:2px 6px;">✕</div>' +
+      '<div onclick="event.stopPropagation(); _p3dClosePopup();" style="cursor:pointer;font-size:22px;color:var(--muted);line-height:1;padding:6px 10px;">✕</div>' +
     '</div>' +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:12px;">' +
       '<div><span style="color:var(--muted);">Jumlah row</span><br><b>' + info.rowCount + '</b></div>' +
@@ -7190,6 +7196,7 @@ async function _p3dInitRotateView() {
     _p3dViewAnim = {
       fromTarget: fromTarget, toTarget: toTarget,
       fromSph: _p3dToSpherical(fromOffset), toSph: _p3dToSpherical(toOffset),
+      fromZoom: _p3dCamera.zoom, toZoom: 1,
       start: performance.now(), dur: 500
     };
   };
@@ -7214,6 +7221,7 @@ async function _p3dInitRotateView() {
     _p3dViewAnim = {
       fromTarget: fromTarget, toTarget: toTarget,
       fromSph: _p3dToSpherical(fromOffset), toSph: _p3dToSpherical(toOffset),
+      fromZoom: _p3dCamera.zoom, toZoom: 1,
       start: performance.now(), dur: 500
     };
   }
@@ -7256,6 +7264,11 @@ async function _p3dInitRotateView() {
       var offset = _p3dFromSpherical(curSph);
       _p3dCamera.position.set(curTarget.x + offset.x, curTarget.y + offset.y, curTarget.z + offset.z);
       _p3dControls.target.set(curTarget.x, curTarget.y, curTarget.z);
+      // Kamera orthographic — "zoom" beneran diatur lewat camera.zoom, bukan jarak posisi
+      if (a.fromZoom != null && a.toZoom != null) {
+        _p3dCamera.zoom = a.fromZoom + (a.toZoom - a.fromZoom) * e;
+        _p3dCamera.updateProjectionMatrix();
+      }
       if (t >= 1) { _p3dViewAnim = null; _p3dControls.enabled = true; }
     }
     if (_p3dControls) _p3dControls.update();
@@ -7307,6 +7320,7 @@ function _p3dBuildRotateScene() {
   }));
   // Simpan titik tengah scene — dipakai buat snap preset view (viewcube AutoCAD-style)
   _p3dSceneCenter = { x: globalMaxX/2, y: 6, z: globalMaxZ/2 };
+  _p3dSceneSpan = { x: globalMaxX, z: globalMaxZ };
   _p3dRackInfo = {}; // reset tiap build ulang scene
   _p3dSelectedLetter = null;
   _p3dHighlightRegistry = [];
