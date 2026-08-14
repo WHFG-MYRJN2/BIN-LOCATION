@@ -6802,6 +6802,7 @@ var _p3dHighlightRegistry = []; // [{mesh, letters:[...]}] — dipakai buat dim 
 var _p3dSelectedLetter = null;
 var _p3dRackInfo = {}; // { A: {x0,x1,z0,z1,segs}, ... } — bounding box & metadata per blok, buat zoom & popup
 var _p3dRaycaster, _p3dPointer, _p3dEventsBound = false;
+var _p3dHitboxGroup = null; // kotak invisible per blok — target klik/hover yang reliable
 var _p3dBinMapRef = {}; // referensi binMap terbaru — dipakai popup detail blok
 var _p3dBinCapRef = {}; // { binCode: capacity } — kapasitas slot per-bin (depth × level), buat hover detail
 var _p3dViewAnim = null; // { fromTarget, toTarget, fromSph, toSph, start, dur } — animasi smooth pindah sudut kamera
@@ -6931,19 +6932,19 @@ function _p3dClosePopup() {
 }
 
 // ── Pilih / batalin pilihan blok rak (dipanggil dari klik canvas) ──
+// ── Pilih blok rak (klik tahap 1) — zoom + dim rak lain, TANPA popup ──
 function _p3dSelectRack(letter) {
   if (_p3dSelectedLetter === letter) return; // udah dipilih, gak usah ulang
   _p3dSelectedLetter = letter;
   _p3dSetHighlight(letter);
   _p3dZoomToRack(letter);
-  _p3dShowRackPopup(letter);
+  _p3dClosePopup(); // pastiin popup bin lama (kalau ada) ketutup pas pindah blok
 }
+// ── Balikin ke tampilan ALL — CUMA dipanggil dari tombol Reset di navigator kamera ──
 function _p3dDeselectRack() {
-  if (!_p3dSelectedLetter) return;
   _p3dSelectedLetter = null;
   _p3dSetHighlight(null);
   _p3dClosePopup();
-  if (window.peta3DResetView) window.peta3DResetView();
 }
 
 // ── Setup raycaster buat hover (tooltip) & klik (pilih blok) di canvas Rotate 3D ──
@@ -6964,17 +6965,15 @@ function _p3dSetupInteraction(canvas) {
     _p3dPointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
     _p3dRaycaster.setFromCamera(_p3dPointer, _p3dCamera);
 
-    // 1) Cek rak asli (InstancedMesh) dulu — prioritas ke instance yang punya binCode (kotak isi)
-    var bestBin = null, bestStruct = null;
+    // 1) Cek kotak isi barang (box/pallet) dulu — buat identifikasi BIN CODE spesifik kalau kena
+    var bestBin = null;
     _p3dHighlightRegistry.forEach(function(entry) {
+      if (!entry.binCodes) return; // skip post/beam (gak ada data bin di situ)
       var hits = _p3dRaycaster.intersectObject(entry.mesh, false);
       if (hits.length && hits[0].instanceId != null) {
-        var letter = entry.letters[hits[0].instanceId];
-        var binCode = entry.binCodes ? entry.binCodes[hits[0].instanceId] : null;
-        if (binCode) {
-          if (!bestBin || hits[0].distance < bestBin.distance) bestBin = { letter: letter, binCode: binCode, distance: hits[0].distance };
-        } else if (letter) {
-          if (!bestStruct || hits[0].distance < bestStruct.distance) bestStruct = { letter: letter, binCode: null, distance: hits[0].distance };
+        var binCode = entry.binCodes[hits[0].instanceId];
+        if (binCode && (!bestBin || hits[0].distance < bestBin.distance)) {
+          bestBin = { letter: entry.letters[hits[0].instanceId], binCode: binCode, distance: hits[0].distance };
         }
       }
     });
@@ -6987,8 +6986,13 @@ function _p3dSetupInteraction(canvas) {
       if (obj.userData && obj.userData.type === 'blockLabel') return { letter: obj.userData.letter, binCode: null };
     }
 
-    // 3) Terakhir baru struktur (post/beam) tanpa isi
-    return bestStruct;
+    // 3) Fallback paling robust — kotak hitbox invisible yang ngebungkus seluruh blok
+    // (struktur asli/tiang/balok terlalu tipis buat di-raycast reliable dari jarak jauh)
+    if (_p3dHitboxGroup) {
+      var hbHits = _p3dRaycaster.intersectObjects(_p3dHitboxGroup.children, false);
+      if (hbHits.length) return { letter: hbHits[0].object.userData.letter, binCode: null };
+    }
+    return null;
   }
 
   function _p3dFormatBinTooltip(binCode) {
@@ -7044,13 +7048,20 @@ function _p3dSetupInteraction(canvas) {
   canvas.addEventListener('click', function(e) {
     if (!_p3dCamera || !_p3dScene) return;
     var target = pickRackTarget(e.clientX, e.clientY);
-    if (target && target.binCode) {
-      _p3dShowBinPopup(target.binCode, target.letter);
-    } else if (target && target.letter) {
+    if (!target || !target.letter) return; // klik area kosong / struktur tanpa rak → gak ngapa-ngapain
+
+    if (!_p3dSelectedLetter) {
+      // ── Tahap 1: belum ada blok yang dipilih → klik di mana aja di blok itu (bin/label/struktur)
+      // langsung SELECT & ZOOM ke seluruh blok itu, TANPA popup ──
       _p3dSelectRack(target.letter);
-    } else if (_p3dSelectedLetter) {
-      _p3dDeselectRack(); // klik area kosong pas ada rak terpilih → balik ke tampilan penuh
+    } else if (target.binCode) {
+      // ── Tahap 2: udah ada blok yang dipilih → klik BIN spesifik → tampilkan popup detail ──
+      _p3dShowBinPopup(target.binCode, target.letter);
+    } else if (target.letter !== _p3dSelectedLetter) {
+      // Klik blok LAIN (bukan bin) pas masih dalam mode terpilih → pindah pilihan ke blok itu
+      _p3dSelectRack(target.letter);
     }
+    // Klik struktur kosong (post/beam) di blok yang lagi dipilih → gak ngapa-ngapain
   });
 }
 
@@ -7171,6 +7182,7 @@ async function _p3dInitRotateView() {
   _p3dInitialCamPos = _p3dCamera.position.clone();
   _p3dInitialTarget = _p3dControls.target.clone();
   window.peta3DResetView = function() {
+    _p3dDeselectRack(); // Reset = satu-satunya cara balik ke tampilan ALL (unselect blok, ilangin dim & popup)
     var fromTarget = _p3dControls.target.clone();
     var toTarget   = _p3dInitialTarget.clone();
     var fromOffset = { x: _p3dCamera.position.x - fromTarget.x, y: _p3dCamera.position.y - fromTarget.y, z: _p3dCamera.position.z - fromTarget.z };
@@ -7321,6 +7333,24 @@ function _p3dBuildRotateScene() {
       maxLevel: maxLevel(l), maxDepth: maxDepth(l), rowCount: nxRaw,
       segCount: s.length
     };
+  });
+
+  // ── Hitbox tak-terlihat per blok — struktur rak (tiang/balok) terlalu tipis buat di-raycast
+  // dari jarak jauh, jadi ini kotak besar transparan yang ngebungkus SELURUH volume blok,
+  // biar klik/hover buat MILIH blok jauh lebih gampang & reliable dari sudut manapun. ──
+  var hitboxGroup = new THREE.Group();
+  _p3dScene.add(hitboxGroup);
+  _p3dHitboxGroup = hitboxGroup;
+  LAYOUT_ORDER.forEach(function(l) {
+    var info = _p3dRackInfo[l];
+    var w = info.x1 - info.x0, d = info.z1 - info.z0, h = info.maxLevel + 1;
+    var hitMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(w, h, d),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    hitMesh.position.set(info.x0 + w/2, h/2, info.z0 + d/2);
+    hitMesh.userData = { type: 'blockHitbox', letter: l };
+    hitboxGroup.add(hitMesh);
   });
 
   var floorPad = 3;
