@@ -1297,7 +1297,13 @@ input:focus, select:focus {
         <!-- Tooltip hover — muncul deket kursor pas nunjuk label blok -->
         <div id="peta3d-hover-tooltip" style="display:none;position:fixed;z-index:20;background:rgba(15,23,42,.92);color:#facc15;font-size:11px;font-weight:700;padding:6px 10px;border-radius:8px;pointer-events:none;white-space:nowrap;"></div>
         <!-- Popup detail blok — muncul pas klik label -->
-        <div id="peta3d-rack-popup" style="display:none;position:absolute;left:10px;bottom:10px;z-index:1000;background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:14px 16px;width:min(280px, calc(100% - 20px));box-shadow:0 8px 24px rgba(0,0,0,.18);touch-action:auto;pointer-events:auto;"></div>
+        <div id="peta3d-rack-popup" style="display:none;position:absolute;left:10px;bottom:10px;z-index:1000;background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:14px 16px;width:min(280px, calc(100% - 20px));box-shadow:0 8px 24px rgba(0,0,0,.18);touch-action:auto;pointer-events:auto;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <div id="peta3d-popup-title" style="font-size:17px;font-weight:900;color:#1e3a8a;"></div>
+            <button id="peta3d-popup-close-btn" type="button" style="cursor:pointer;font-size:22px;color:var(--muted);line-height:1;padding:8px 12px;background:none;border:none;touch-action:manipulation;">✕</button>
+          </div>
+          <div id="peta3d-popup-body"></div>
+        </div>
         <div id="peta3d-viewcube" style="position:absolute;top:8px;right:8px;display:grid;grid-template-columns:repeat(3,26px) 22px;grid-template-rows:repeat(3,26px);gap:2px;z-index:5;background:rgba(255,255,255,.55);padding:4px;border-radius:10px;backdrop-filter:blur(2px);">
           <div></div>
           <button onclick="if(window.peta3DSetPresetView)peta3DSetPresetView('top')" style="grid-column:2;grid-row:1;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--muted);font-size:9px;font-weight:800;cursor:pointer;">TOP</button>
@@ -6888,11 +6894,8 @@ function _p3dShowBinPopup(binCode, letter) {
       '</div>';
     }).join('');
   }
-  box.innerHTML =
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
-      '<div style="font-size:17px;font-weight:900;color:#1e3a8a;">📍 ' + binCode + '</div>' +
-      '<div onclick="event.stopPropagation(); _p3dClosePopup();" style="cursor:pointer;font-size:22px;color:var(--muted);line-height:1;padding:6px 10px;">✕</div>' +
-    '</div>' +
+  document.getElementById('peta3d-popup-title').textContent = '📍 ' + binCode;
+  document.getElementById('peta3d-popup-body').innerHTML =
     (cap ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Kapasitas: ' + used + '/' + cap + ' plt</div>' : '') +
     '<div style="max-height:200px;overflow-y:auto;">' + itemsHtml + '</div>';
   box.style.display = 'block';
@@ -6917,11 +6920,8 @@ function _p3dShowRackPopup(letter) {
   });
   var box = document.getElementById('peta3d-rack-popup');
   if (!box) return;
-  box.innerHTML =
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
-      '<div style="font-size:18px;font-weight:900;color:#1e3a8a;">📦 BLOK ' + letter + '</div>' +
-      '<div onclick="event.stopPropagation(); _p3dClosePopup();" style="cursor:pointer;font-size:22px;color:var(--muted);line-height:1;padding:6px 10px;">✕</div>' +
-    '</div>' +
+  document.getElementById('peta3d-popup-title').textContent = '📦 BLOK ' + letter;
+  document.getElementById('peta3d-popup-body').innerHTML =
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:12px;">' +
       '<div><span style="color:var(--muted);">Jumlah row</span><br><b>' + info.rowCount + '</b></div>' +
       '<div><span style="color:var(--muted);">Level tertinggi</span><br><b>' + info.maxLevel + '</b></div>' +
@@ -6961,6 +6961,16 @@ function _p3dSetupInteraction(canvas) {
   _p3dRaycaster = new THREE.Raycaster();
   _p3dPointer = new THREE.Vector2();
   var tooltip = document.getElementById('peta3d-hover-tooltip');
+
+  // Tombol close popup — elemen STATIS (bukan innerHTML yang digenerate ulang tiap kali popup muncul),
+  // dipasang listener SEKALI di sini biar gak ada kemungkinan konflik.
+  var closeBtn = document.getElementById('peta3d-popup-close-btn');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      _p3dClosePopup();
+    });
+  }
 
   // Cari blok/bin yang lagi ditunjuk kursor — cek label sprite ATAU rak asli (post/beam/box/pallet)
   // lewat instanceId. Kalau instance itu punya binCode (kotak isi barang), prioritaskan info per-bin
