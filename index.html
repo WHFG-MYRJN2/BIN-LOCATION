@@ -1297,7 +1297,7 @@ input:focus, select:focus {
         <!-- Tooltip hover — muncul deket kursor pas nunjuk label blok -->
         <div id="peta3d-hover-tooltip" style="display:none;position:fixed;z-index:20;background:rgba(15,23,42,.92);color:#facc15;font-size:11px;font-weight:700;padding:6px 10px;border-radius:8px;pointer-events:none;white-space:nowrap;"></div>
         <!-- Popup detail blok — muncul pas klik label -->
-        <div id="peta3d-rack-popup" style="display:none;position:absolute;left:10px;bottom:10px;z-index:15;background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:14px 16px;width:min(280px, calc(100% - 20px));box-shadow:0 8px 24px rgba(0,0,0,.18);"></div>
+        <div id="peta3d-rack-popup" style="display:none;position:absolute;left:10px;bottom:10px;z-index:15;background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:14px 16px;width:min(280px, calc(100% - 20px));box-shadow:0 8px 24px rgba(0,0,0,.18);touch-action:auto;pointer-events:auto;"></div>
         <div id="peta3d-viewcube" style="position:absolute;top:8px;right:8px;display:grid;grid-template-columns:repeat(3,26px) 22px;grid-template-rows:repeat(3,26px);gap:2px;z-index:5;background:rgba(255,255,255,.55);padding:4px;border-radius:10px;backdrop-filter:blur(2px);">
           <div></div>
           <button onclick="if(window.peta3DSetPresetView)peta3DSetPresetView('top')" style="grid-column:2;grid-row:1;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--muted);font-size:9px;font-weight:800;cursor:pointer;">TOP</button>
@@ -6829,7 +6829,7 @@ function _p3dShortestAngleLerp(a, b, t) {
 function _p3dSetHighlight(letter) {
   if (!_p3dTHREE) return;
   var white = new _p3dTHREE.Color(1,1,1);
-  var dim   = new _p3dTHREE.Color(0.28,0.28,0.28);
+  var dim   = new _p3dTHREE.Color(0.1,0.1,0.11); // dikuatin biar rak lain keliatan jauh lebih pudar/transparan
   _p3dHighlightRegistry.forEach(function(entry) {
     var mesh = entry.mesh, letters = entry.letters;
     for (var i = 0; i < letters.length; i++) {
@@ -6884,7 +6884,7 @@ function _p3dShowBinPopup(binCode, letter) {
   box.innerHTML =
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
       '<div style="font-size:17px;font-weight:900;color:#1e3a8a;">📍 ' + binCode + '</div>' +
-      '<div onclick="_p3dClosePopup()" style="cursor:pointer;font-size:20px;color:var(--muted);line-height:1;padding:2px 6px;">✕</div>' +
+      '<div onclick="_p3dClosePopup()" onpointerdown="event.stopPropagation()" style="cursor:pointer;font-size:20px;color:var(--muted);line-height:1;padding:2px 6px;">✕</div>' +
     '</div>' +
     (cap ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Kapasitas: ' + used + '/' + cap + ' plt</div>' : '') +
     '<div style="max-height:200px;overflow-y:auto;">' + itemsHtml + '</div>';
@@ -6913,7 +6913,7 @@ function _p3dShowRackPopup(letter) {
   box.innerHTML =
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
       '<div style="font-size:18px;font-weight:900;color:#1e3a8a;">📦 BLOK ' + letter + '</div>' +
-      '<div onclick="_p3dDeselectRack()" style="cursor:pointer;font-size:20px;color:var(--muted);line-height:1;padding:2px 6px;">✕</div>' +
+      '<div onclick="_p3dDeselectRack()" onpointerdown="event.stopPropagation()" style="cursor:pointer;font-size:20px;color:var(--muted);line-height:1;padding:2px 6px;">✕</div>' +
     '</div>' +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:12px;">' +
       '<div><span style="color:var(--muted);">Jumlah row</span><br><b>' + info.rowCount + '</b></div>' +
@@ -7020,23 +7020,22 @@ function _p3dSetupInteraction(canvas) {
     _lastHoverCheck = now;
     if (!_p3dCamera || !_p3dScene) return;
     var target = pickRackTarget(e.clientX, e.clientY);
-    if (target && target.binCode) {
-      tooltip.innerHTML = _p3dFormatBinTooltip(target.binCode);
+    // Tooltip detail cuma muncul kalau UDAH ada rak yang dipilih (sesuai permintaan) —
+    // sebelum pilih rak, kursor tetap berubah jadi pointer aja (biar tau bisa diklik).
+    if (target && _p3dSelectedLetter) {
+      if (target.binCode) {
+        tooltip.innerHTML = _p3dFormatBinTooltip(target.binCode);
+      } else if (target.letter) {
+        var info = _p3dRackInfo[target.letter];
+        tooltip.innerHTML = '<b>BLOK ' + target.letter + '</b> · ' + (info ? info.rowCount + ' row · depth ' + info.maxDepth + ' · level ' + info.maxLevel : '');
+      }
       tooltip.style.left = (e.clientX + 14) + 'px';
       tooltip.style.top  = (e.clientY + 10) + 'px';
       tooltip.style.display = 'block';
-      canvas.style.cursor = 'pointer';
-    } else if (target && target.letter) {
-      var info = _p3dRackInfo[target.letter];
-      tooltip.innerHTML = '<b>BLOK ' + target.letter + '</b> · ' + (info ? info.rowCount + ' row · depth ' + info.maxDepth + ' · level ' + info.maxLevel : '');
-      tooltip.style.left = (e.clientX + 14) + 'px';
-      tooltip.style.top  = (e.clientY + 10) + 'px';
-      tooltip.style.display = 'block';
-      canvas.style.cursor = 'pointer';
     } else {
       tooltip.style.display = 'none';
-      canvas.style.cursor = '';
     }
+    canvas.style.cursor = target ? 'pointer' : '';
   });
   canvas.addEventListener('mouseleave', function() { tooltip.style.display = 'none'; });
 
@@ -7157,9 +7156,8 @@ async function _p3dInitRotateView() {
   _p3dControls.minPolarAngle = 0.05;
   _p3dControls.maxPolarAngle = Math.PI * 0.5; // izinkan persis 90° (horizontal) buat preset front/back/left/right
   _p3dControls.addEventListener('start', function() {
-    // Jangan batalin animasi yang BARU aja di-set (<150ms) — biar gak ke-cancel sendiri
-    // oleh event 'start' yang nyusul dari klik/tap yang sama (drag palsu).
-    if (_p3dViewAnim && (performance.now() - _p3dViewAnim.start) < 150) return;
+    // Controls otomatis dikunci (enabled=false) selama animasi jalan (lihat animate()),
+    // jadi event 'start' ini cuma bisa muncul dari drag ASLI user — aman langsung batalin.
     _p3dViewAnim = null;
   });
   _p3dScene.add(new THREE.AmbientLight(0xffffff, 0.8));
@@ -7228,6 +7226,7 @@ async function _p3dInitRotateView() {
   function animate() {
     requestAnimationFrame(animate);
     if (_p3dViewAnim) {
+      if (_p3dControls.enabled) _p3dControls.enabled = false; // kunci OrbitControls selama animasi — gak bisa keinterupsi drag/start event apapun
       var a = _p3dViewAnim;
       var t = (performance.now() - a.start) / a.dur;
       if (t >= 1) t = 1;
@@ -7245,7 +7244,7 @@ async function _p3dInitRotateView() {
       var offset = _p3dFromSpherical(curSph);
       _p3dCamera.position.set(curTarget.x + offset.x, curTarget.y + offset.y, curTarget.z + offset.z);
       _p3dControls.target.set(curTarget.x, curTarget.y, curTarget.z);
-      if (t >= 1) _p3dViewAnim = null;
+      if (t >= 1) { _p3dViewAnim = null; _p3dControls.enabled = true; }
     }
     if (_p3dControls) _p3dControls.update();
     if (_p3dRenderer && _p3dScene && _p3dCamera) _p3dRenderer.render(_p3dScene, _p3dCamera);
@@ -7291,7 +7290,7 @@ function _p3dBuildRotateScene() {
     var s = groups.filter(function(g){return g.bin===l;});
     var o = Math.min.apply(null, s.map(function(x){return x.rowFrom;}));
     var nxRaw = Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;}));
-    var extra = (l === 'G' ? (s.length-1)*3 : 0) + (l === 'I' ? 9 : 0);
+    var extra = (l === 'G' ? (s.length-1)*4.5 : 0) + (l === 'I' ? 9 : 0);
     return nxRaw + extra;
   }));
   // Simpan titik tengah scene — dipakai buat snap preset view (viewcube AutoCAD-style)
@@ -7339,8 +7338,8 @@ function _p3dBuildRotateScene() {
     { x: -3, z: -1 },
     { x: 0, z: -1 },
     { x: 0, z: -1 },
-    { x: 28, z: -1 },
-    { x: 28, z: 47 },
+    { x: 29.5, z: -1 },
+    { x: 29.5, z: 47 },
     { x: 36.5, z: 47 },
     { x: 36.5, z: 64 },
     { x: 52, z: 64 },
@@ -7483,14 +7482,14 @@ function _p3dBuildRotateScene() {
     { label:"T6", cx:12.5, cz:39, w:25, d:1 },
     { label:"T7", cx:12.5, cz:52.9, w:25, d:1 },
     { label:"T8", cx:12.5, cz:55.3, w:25, d:1 },
-    { label:"T9", cx:27.25, cz:9.1, w:1, d:4 },
-    { label:"T10", cx:27.25, cz:14.4, w:1, d:5 },
-    { label:"T11", cx:27.25, cz:20.2, w:1, d:5 },
-    { label:"T12", cx:27.25, cz:26.2, w:1, d:5 },
-    { label:"T13", cx:27.25, cz:32.1, w:1, d:5 },
-    { label:"T14", cx:27.25, cz:38.3, w:1, d:5 },
-    { label:"T15", cx:27.25, cz:44.5, w:1, d:5 },
-    { label:"T16", cx:27.25, cz:49.7, w:1, d:3 },
+    { label:"T9", cx:28.65, cz:9.1, w:1, d:4 },
+    { label:"T10", cx:28.65, cz:14.4, w:1, d:5 },
+    { label:"T11", cx:28.65, cz:20.2, w:1, d:5 },
+    { label:"T12", cx:28.65, cz:26.2, w:1, d:5 },
+    { label:"T13", cx:28.65, cz:32.1, w:1, d:5 },
+    { label:"T14", cx:28.65, cz:38.3, w:1, d:5 },
+    { label:"T15", cx:28.65, cz:44.5, w:1, d:5 },
+    { label:"T16", cx:28.65, cz:49.7, w:1, d:3 },
     { label:"T17", cx:25.6, cz:45.9, w:1, d:4 },
     { label:"T18", cx:25.6, cz:31.7, w:1, d:4 },
     { label:"T19", cx:25.6, cz:16.8, w:1, d:4 },
@@ -7505,7 +7504,7 @@ function _p3dBuildRotateScene() {
     { label:"T28", cx:23.5, cz:63.4, w:4, d:1 },
     { label:"T29", cx:27.8, cz:63.4, w:4, d:1 },
     { label:"T30", cx:32.1, cz:63.4, w:4, d:1 },
-    { label:"T31", cx:35.5, cz:64.8, w:2, d:1 }, // ⚠️ TODO: gak ada di data terakhir Bos, ini estimasi sementara (di antara T30 & T32) — tolong dicek/koreksi
+    { label:"T31", cx:35.5, cz:64.8, w:2, d:1 },
     { label:"T32", cx:37.8, cz:64.8, w:3, d:1 },
     { label:"T33", cx:40.9, cz:64.8, w:3, d:1 },
     { label:"T34", cx:44, cz:64.8, w:3, d:1 },
@@ -7535,7 +7534,7 @@ function _p3dBuildRotateScene() {
     var rackDepth = maxDepth(letter);
     var isMirrored = MIRRORED.indexOf(letter) !== -1;
 
-    var SEG_GAP = 3;
+    var SEG_GAP = 4.5;
     var xGapOffset = 0;
     var prevSeg = null;
     var positions = [];
@@ -7581,7 +7580,7 @@ function _p3dBuildRotateScene() {
     var nx = maxRow - origin + 1;
     var zBase = rackMeta[letter].start;
     var rackDepth = maxDepth(letter);
-    var SEG_GAP = 3;
+    var SEG_GAP = 4.5;
     var xGapOffset = 0, prevSeg = null;
     for (var xi=0; xi<nx; xi++) {
       var rowNum = origin + xi;
@@ -7648,7 +7647,7 @@ function _p3dBuildRotateScene() {
       var rowNum2 = origin + xi2;
       var seg2 = segs.find(function(s){return rowNum2>=s.rowFrom && rowNum2<=s.rowTo;});
       if (!seg2) continue;
-      if (letter === 'G' && prevSegB && prevSegB !== seg2) xGapOffsetB += 3;
+      if (letter === 'G' && prevSegB && prevSegB !== seg2) xGapOffsetB += 4.5;
       prevSegB = seg2;
       var iBackAlignB = (letter === 'I' && seg2.rowFrom >= 28);
       var zBaseEffB = iBackAlignB ? (zBase + (rackDepthB - seg2.depth)) : (zBase + _gFrontAlignOffset(letter, segs, seg2));
@@ -7690,7 +7689,7 @@ function _p3dBuildRotateScene() {
       var rowNum2 = origin + xi2;
       var seg2 = segs.find(function(s){return rowNum2>=s.rowFrom && rowNum2<=s.rowTo;});
       if (!seg2) continue;
-      if (letter === 'G' && prevSegB && prevSegB !== seg2) xGapOffsetB += 3;
+      if (letter === 'G' && prevSegB && prevSegB !== seg2) xGapOffsetB += 4.5;
       prevSegB = seg2;
       var iBackAlignB = (letter === 'I' && seg2.rowFrom >= 28);
       var zBaseEffB = iBackAlignB ? (zBase + (rackDepthB - seg2.depth)) : (zBase + _gFrontAlignOffset(letter, segs, seg2));
