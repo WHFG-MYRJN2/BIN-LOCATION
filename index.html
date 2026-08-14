@@ -6879,7 +6879,7 @@ function _p3dShowRackPopup(letter) {
   box.innerHTML =
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
       '<div style="font-size:18px;font-weight:900;color:#1e3a8a;">📦 BLOK ' + letter + '</div>' +
-      '<div onclick="_p3dClosePopup()" style="cursor:pointer;font-size:20px;color:var(--muted);line-height:1;padding:2px 6px;">✕</div>' +
+      '<div onclick="_p3dDeselectRack()" style="cursor:pointer;font-size:20px;color:var(--muted);line-height:1;padding:2px 6px;">✕</div>' +
     '</div>' +
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:12px;">' +
       '<div><span style="color:var(--muted);">Jumlah row</span><br><b>' + info.rowCount + '</b></div>' +
@@ -6921,21 +6921,40 @@ function _p3dSetupInteraction(canvas) {
   _p3dPointer = new THREE.Vector2();
   var tooltip = document.getElementById('peta3d-hover-tooltip');
 
-  function pickLabel(clientX, clientY) {
+  // Cari blok yang lagi ditunjuk kursor — cek label sprite ATAU rak asli (post/beam/box/pallet)
+  // lewat instanceId, biar area hover-nya segede rak-nya, bukan cuma label kecil doang.
+  function pickRackLetter(clientX, clientY) {
     var rect = canvas.getBoundingClientRect();
     _p3dPointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
     _p3dPointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
     _p3dRaycaster.setFromCamera(_p3dPointer, _p3dCamera);
-    var hits = _p3dRaycaster.intersectObjects(_p3dScene.children, true);
-    for (var i = 0; i < hits.length; i++) {
-      if (hits[i].object.userData && hits[i].object.userData.type === 'blockLabel') return hits[i].object.userData.letter;
+
+    // 1) Cek label sprite dulu (paling gampang & prioritas)
+    var labelHits = _p3dRaycaster.intersectObjects(_p3dScene.children, true);
+    for (var i = 0; i < labelHits.length; i++) {
+      var obj = labelHits[i].object;
+      if (obj.userData && obj.userData.type === 'blockLabel') return obj.userData.letter;
     }
-    return null;
+
+    // 2) Cek rak asli (InstancedMesh) — cari instance yang paling dekat kamera di semua mesh terdaftar
+    var best = null;
+    _p3dHighlightRegistry.forEach(function(entry) {
+      var hits = _p3dRaycaster.intersectObject(entry.mesh, false);
+      if (hits.length && hits[0].instanceId != null) {
+        var letter = entry.letters[hits[0].instanceId];
+        if (letter && (!best || hits[0].distance < best.distance)) best = { letter: letter, distance: hits[0].distance };
+      }
+    });
+    return best ? best.letter : null;
   }
 
+  var _lastHoverCheck = 0;
   canvas.addEventListener('mousemove', function(e) {
+    var now = performance.now();
+    if (now - _lastHoverCheck < 60) return; // throttle biar gak berat (raycast banyak instance)
+    _lastHoverCheck = now;
     if (!_p3dCamera || !_p3dScene) return;
-    var letter = pickLabel(e.clientX, e.clientY);
+    var letter = pickRackLetter(e.clientX, e.clientY);
     if (letter) {
       var info = _p3dRackInfo[letter];
       tooltip.innerHTML = '<b>BLOK ' + letter + '</b> · ' + (info ? info.rowCount + ' row · depth ' + info.maxDepth + ' · level ' + info.maxLevel : '');
@@ -6950,13 +6969,11 @@ function _p3dSetupInteraction(canvas) {
   });
   canvas.addEventListener('mouseleave', function() { tooltip.style.display = 'none'; });
 
-  var _tapStartX = 0, _tapStartY = 0;
-  canvas.addEventListener('pointerdown', function(e) { _tapStartX = e.clientX; _tapStartY = e.clientY; });
-  canvas.addEventListener('pointerup', function(e) {
-    // Cuma anggap "klik" kalau gak geser jauh (biar gak konflik sama drag-rotate OrbitControls)
-    if (Math.abs(e.clientX - _tapStartX) > 6 || Math.abs(e.clientY - _tapStartY) > 6) return;
+  // Pakai 'click' native (bukan pointerdown/up manual) — browser otomatis batalin klik
+  // kalau ada drag di antaranya, jadi gak bentrok sama drag-rotate OrbitControls.
+  canvas.addEventListener('click', function(e) {
     if (!_p3dCamera || !_p3dScene) return;
-    var letter = pickLabel(e.clientX, e.clientY);
+    var letter = pickRackLetter(e.clientX, e.clientY);
     if (letter) {
       _p3dSelectRack(letter);
     } else if (_p3dSelectedLetter) {
@@ -7520,7 +7537,7 @@ function _p3dBuildRotateScene() {
   function isMir(l){ return MIRRORED.indexOf(l) !== -1; }
 
   var postGeo = new THREE.BoxGeometry(0.06, 1, 0.06);
-  var postMat = new THREE.MeshBasicMaterial({ color: 0x1e3a8a, vertexColors: true });
+  var postMat = new THREE.MeshBasicMaterial({ color: 0x1e3a8a });
   var postInstances = [];
   postData.forEach(function(p) {
     postInstances.push({ x:p.x, z:p.zBase, h:p.levels, letter:p.letter });
@@ -7532,6 +7549,7 @@ function _p3dBuildRotateScene() {
     postMesh.setMatrixAt(i, mtx);
     postMesh.setColorAt(i, _p3dWhite);
   });
+  if (postMesh.instanceColor) postMesh.instanceColor.needsUpdate = true;
   framesGroup.add(postMesh);
   _p3dHighlightRegistry.push({ mesh: postMesh, letters: postInstances.map(function(pi){ return pi.letter; }) });
 
@@ -7566,13 +7584,14 @@ function _p3dBuildRotateScene() {
     });
   });
   var beamGeo = new THREE.BoxGeometry(0.07, 0.09, 1);
-  var beamMat = new THREE.MeshStandardMaterial({ color: 0xc2410c, roughness:0.5, vertexColors: true });
+  var beamMat = new THREE.MeshStandardMaterial({ color: 0xc2410c, roughness:0.5 });
   var beamMesh = new THREE.InstancedMesh(beamGeo, beamMat, beamInstances.length || 1);
   beamInstances.forEach(function(bi, i) {
     mtx.compose(new THREE.Vector3(bi.x, bi.y, bi.z), identityQuat, new THREE.Vector3(1,1,bi.depth));
     beamMesh.setMatrixAt(i, mtx);
     beamMesh.setColorAt(i, _p3dWhite);
   });
+  if (beamMesh.instanceColor) beamMesh.instanceColor.needsUpdate = true;
   framesGroup.add(beamMesh);
   _p3dHighlightRegistry.push({ mesh: beamMesh, letters: beamInstances.map(function(bi){ return bi.letter; }) });
 
@@ -7608,13 +7627,14 @@ function _p3dBuildRotateScene() {
     });
   });
   var beamXGeo = new THREE.BoxGeometry(1, 0.09, 0.07);
-  var beamXMat = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness:0.5, vertexColors: true });
+  var beamXMat = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness:0.5 });
   var beamXMesh = new THREE.InstancedMesh(beamXGeo, beamXMat, beamXInstances.length || 1);
   beamXInstances.forEach(function(bi, i) {
     mtx.compose(new THREE.Vector3(bi.x, bi.y, bi.z), identityQuat, new THREE.Vector3(1,1,1));
     beamXMesh.setMatrixAt(i, mtx);
     beamXMesh.setColorAt(i, _p3dWhite);
   });
+  if (beamXMesh.instanceColor) beamXMesh.instanceColor.needsUpdate = true;
   framesGroup.add(beamXMesh);
   _p3dHighlightRegistry.push({ mesh: beamXMesh, letters: beamXInstances.map(function(bi){ return bi.letter; }) });
 
@@ -7622,10 +7642,10 @@ function _p3dBuildRotateScene() {
   boxData.forEach(function(b){ (byColor[b.color] = byColor[b.color]||[]).push(b); });
   var boxGeo = new THREE.BoxGeometry(0.86, 0.8, 0.86);
   var palletGeo = new THREE.BoxGeometry(0.9, 0.12, 0.9);
-  var palletMat = new THREE.MeshStandardMaterial({ color: PALLET_COLOR, roughness:0.8, vertexColors: true });
+  var palletMat = new THREE.MeshStandardMaterial({ color: PALLET_COLOR, roughness:0.8 });
   Object.keys(byColor).forEach(function(colorKey) {
     var arr = byColor[colorKey];
-    var mat = new THREE.MeshStandardMaterial({ color: parseInt(colorKey), roughness:0.6, vertexColors: true });
+    var mat = new THREE.MeshStandardMaterial({ color: parseInt(colorKey), roughness:0.6 });
     var mesh = new THREE.InstancedMesh(boxGeo, mat, arr.length);
     arr.forEach(function(b, i) {
       dummy.position.set(b.x + 0.5, b.y + 0.5 + 0.06, b.z + 0.5);
@@ -7633,6 +7653,7 @@ function _p3dBuildRotateScene() {
       mesh.setMatrixAt(i, dummy.matrix);
       mesh.setColorAt(i, _p3dWhite);
     });
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     boxesGroup.add(mesh);
     _p3dHighlightRegistry.push({ mesh: mesh, letters: arr.map(function(b){ return b.letter; }) });
   });
@@ -7644,6 +7665,7 @@ function _p3dBuildRotateScene() {
       palletMesh.setMatrixAt(i, dummy.matrix);
       palletMesh.setColorAt(i, _p3dWhite);
     });
+    if (palletMesh.instanceColor) palletMesh.instanceColor.needsUpdate = true;
     boxesGroup.add(palletMesh);
     _p3dHighlightRegistry.push({ mesh: palletMesh, letters: boxData.map(function(b){ return b.letter; }) });
 
