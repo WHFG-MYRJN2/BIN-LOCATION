@@ -1294,6 +1294,10 @@ input:focus, select:focus {
       <div id="peta-3d-rotate-wrap" style="display:none;position:relative;height:60vh;touch-action:none;">
         <canvas id="peta3dRotateCanvas" style="display:block;width:100%;height:100%;"></canvas>
         <div id="peta3dRotateError" style="display:none;margin:14px;padding:14px;background:#7f1d1d;border-radius:10px;font-size:11px;color:#fecaca;white-space:pre-wrap;position:absolute;top:0;left:0;right:0;"></div>
+        <!-- Tooltip hover — muncul deket kursor pas nunjuk label blok -->
+        <div id="peta3d-hover-tooltip" style="display:none;position:fixed;z-index:20;background:rgba(15,23,42,.92);color:#facc15;font-size:11px;font-weight:700;padding:6px 10px;border-radius:8px;pointer-events:none;white-space:nowrap;"></div>
+        <!-- Popup detail blok — muncul pas klik label -->
+        <div id="peta3d-rack-popup" style="display:none;position:absolute;left:10px;bottom:10px;z-index:15;background:var(--surface);border:1.5px solid var(--border);border-radius:14px;padding:14px 16px;width:min(280px, calc(100% - 20px));box-shadow:0 8px 24px rgba(0,0,0,.18);"></div>
         <div id="peta3d-viewcube" style="position:absolute;top:8px;right:8px;display:grid;grid-template-columns:repeat(3,26px) 22px;grid-template-rows:repeat(3,26px);gap:2px;z-index:5;background:rgba(255,255,255,.55);padding:4px;border-radius:10px;backdrop-filter:blur(2px);">
           <div></div>
           <button onclick="if(window.peta3DSetPresetView)peta3DSetPresetView('top')" style="grid-column:2;grid-row:1;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--muted);font-size:9px;font-weight:800;cursor:pointer;">TOP</button>
@@ -2752,7 +2756,10 @@ function _checkBinCapacity() {
   return { cap: cap, curUsed: curUsed, afterUsed: afterUsed };
 }
 
+var _submitInFlight = false; // guard biar submitForm() gak bisa kepanggil dobel (double-tap, dsb)
 function submitForm() {
+  if (_submitInFlight) return; // udah ada request jalan, abaikan tap kedua
+
   var pallet      = document.getElementById('f-pallet').value.trim();
   var pecahan     = parseInt(document.getElementById('f-pecahan').value) || 0;
   var totalKarton = parseInt(document.getElementById('f-total-karton').value) || 0;
@@ -2760,9 +2767,11 @@ function submitForm() {
   var quotation   = document.getElementById('f-quotation').value.trim();
 
   if (!pallet && pecahan === 0) { showToast('⚠️ Isi jumlah pallet atau pecahan'); return; }
+  if (Number(pallet) < 0 || pecahan < 0) { showToast('⚠️ Jumlah tidak boleh minus'); return; }
   if (pallet > 0 && !state.std)  { showToast('❌ STD belum diisi — isi STD manual dulu'); return; }
   if (!prodate) { showToast('⚠️ Isi tanggal prodate'); return; }
   if (state.tipe === 'EKSPOR' && !quotation) { showToast('⚠️ Isi nomor quotation'); return; }
+  if (state.aksi === 'PINDAH' && state.binTujuan === state.binLoc) { showToast('⚠️ Bin tujuan sama dengan bin asal'); return; }
 
   // Blok MASUK jika bin sudah >= 110% kapasitas
   if (state.aksi === 'MASUK') {
@@ -2808,22 +2817,29 @@ function submitForm() {
     quotation:   quotation,
     operator:    state.operator,
     keterangan:  document.getElementById('f-keterangan').value.trim(),
-    timestamp:   new Date().toISOString()
+    timestamp:   new Date().toISOString(),
+    requestId:   Date.now() + '-' + Math.random().toString(36).slice(2, 10) // idempotency key buat cegah dobel-input di backend
   };
 
+  _submitInFlight = true;
+  document.getElementById('submit-btn').disabled = true;
   showLoading(true);
 
   gasCall('saveBinMovement', payload,
     function(res) {
+      _submitInFlight = false;
       showLoading(false);
       if (res && res.ok) {
         showSuccess(payload);
       } else {
+        document.getElementById('submit-btn').disabled = false;
         showToast('❌ Gagal: ' + (res ? res.msg : 'Error'));
       }
     },
     function(err) {
+      _submitInFlight = false;
       showLoading(false);
+      document.getElementById('submit-btn').disabled = false;
       showToast('❌ Error: ' + ((err && err.message) || 'Gagal'));
     }
   );
@@ -6002,7 +6018,9 @@ function calcTrialTotal() {
   document.getElementById('tmasuk-total').textContent = total;
 }
 
+var _trialMasukInFlight = false;
 function submitTrialMasuk() {
+  if (_trialMasukInFlight) return;
   var bin      = document.getElementById('tmasuk-bin-input').value.trim().toUpperCase();
   var plt      = Number(document.getElementById('tmasuk-pallet').value)  || 0;
   var pec      = Number(document.getElementById('tmasuk-pecahan').value) || 0;
@@ -6017,6 +6035,7 @@ function submitTrialMasuk() {
   var tipe = quotation ? 'EKSPOR' : 'LOKAL';
 
   if (!bin)            { showToast('❌ Bin Loc belum diisi'); return; }
+  if (plt < 0 || pec < 0) { showToast('❌ Jumlah tidak boleh minus'); return; }
   if (plt + pec === 0) { showToast('❌ Jumlah pallet/pecahan 0'); return; }
   if (!prodate)        { showToast('❌ Prodate belum diisi'); return; }
   if (plt > 0 && std === 0) { showToast('❌ STD belum terbaca — cek master SKU'); return; }
@@ -6026,11 +6045,17 @@ function submitTrialMasuk() {
     binLoc: bin, binTujuan: '',
     skuKode: _trialScannedSku.kode, skuNama: _trialScannedSku.nama,
     pallet: plt, pecahan: pec, totalKarton: total, std: std,
-    prodate: prodate, quotation: quotation, operator: operator, keterangan: keterangan || 'TRIAL'
+    prodate: prodate, quotation: quotation, operator: operator, keterangan: keterangan || 'TRIAL',
+    requestId: Date.now() + '-' + Math.random().toString(36).slice(2, 10)
   };
 
+  _trialMasukInFlight = true;
+  var _tmBtn = document.querySelector('#screen-trial-masuk .submit-btn, #tmasuk-submit-btn');
+  if (_tmBtn) _tmBtn.disabled = true;
   showLoading(true);
   gasCall('saveBinMovement', payload, function(res) {
+    _trialMasukInFlight = false;
+    if (_tmBtn) _tmBtn.disabled = false;
     showLoading(false);
     if (res && res.ok) {
       showToast('✅ Masuk berhasil disimpan!');
@@ -6039,6 +6064,8 @@ function submitTrialMasuk() {
       showToast('❌ Gagal: ' + (res ? res.msg : 'Error'));
     }
   }, function(err) {
+    _trialMasukInFlight = false;
+    if (_tmBtn) _tmBtn.disabled = false;
     showLoading(false);
     showToast('❌ Error: ' + ((err&&err.message)||'Gagal'));
   });
@@ -6351,7 +6378,9 @@ function resetTrialKForm() {
   _trialK.sku     = null;
 }
 
+var _trialKeluarInFlight = false;
 function submitTrialKeluar() {
+  if (_trialKeluarInFlight) return;
   var plt      = Number(document.getElementById('tkeluar-pallet').value)  || 0;
   var pec      = Number(document.getElementById('tkeluar-pecahan').value) || 0;
   var total    = Number(document.getElementById('tkeluar-total').textContent) || 0;
@@ -6361,9 +6390,11 @@ function submitTrialKeluar() {
 
   if (!_trialK.sku)      { showToast('❌ Pilih barang dulu'); return; }
   if (!_trialK.prodate)  { showToast('❌ Pilih prodate dulu'); return; }
+  if (plt < 0 || pec < 0) { showToast('❌ Jumlah tidak boleh minus'); return; }
   if (plt + pec === 0)   { showToast('❌ Jumlah tidak boleh 0'); return; }
   if (!_trialK.operator) { showToast('❌ Pilih operator dulu'); return; }
   if (_trialK.aksi === 'PINDAH' && !binTujuan) { showToast('❌ Isi bin tujuan dulu'); return; }
+  if (_trialK.aksi === 'PINDAH' && binTujuan === _trialK.bin) { showToast('❌ Bin tujuan sama dengan bin asal'); return; }
 
   var payload = {
     aksi:       _trialK.aksi,
@@ -6379,11 +6410,17 @@ function submitTrialKeluar() {
     prodate:    _trialK.prodate,
     quotation:  _trialK.quotation,
     operator:   _trialK.operator,
-    keterangan: keterangan || 'TRIAL'
+    keterangan: keterangan || 'TRIAL',
+    requestId:  Date.now() + '-' + Math.random().toString(36).slice(2, 10)
   };
 
+  _trialKeluarInFlight = true;
+  var _tkBtn = document.getElementById('tkeluar-submit-btn');
+  if (_tkBtn) _tkBtn.disabled = true;
   showLoading(true);
   gasCall('saveBinMovement', payload, function(res) {
+    _trialKeluarInFlight = false;
+    if (_tkBtn) _tkBtn.disabled = false;
     showLoading(false);
     if (res && res.ok) {
       showToast('✅ ' + _trialK.aksi + ' berhasil disimpan!');
@@ -6392,6 +6429,8 @@ function submitTrialKeluar() {
       showToast('❌ Gagal: ' + (res ? res.msg : 'Error'));
     }
   }, function(err) {
+    _trialKeluarInFlight = false;
+    if (_tkBtn) _tkBtn.disabled = false;
     showLoading(false);
     showToast('❌ Error: ' + ((err&&err.message)||'Gagal'));
   });
@@ -6579,20 +6618,25 @@ function opnameTidakSesuai(rowId, prodate, quotation, isEksp) {
   }
 }
 
+var _opnameRowInFlight = {}; // guard per-baris biar tombol SESUAI/PERBAIKI gak bisa di-tap dobel
 function opnameSesuai(kode, nama, idx, prodate, sysPlt, sysPec, sysKtn, sysQt, sysTipe) {
+  var rowId = 'oprow-' + kode + '-' + idx;
+  if (_opnameRowInFlight[rowId]) return;
   var keeper = _getKeeper();
   if (!keeper) { showToast('❌ Isi nama stock keeper dulu'); return; }
-  var rowId = 'oprow-' + kode + '-' + idx;
   var bin   = _trialScannedBin;
   var payload = {
     aksi: 'OPNAME', tipe: sysTipe || 'LOKAL', binLoc: bin,
     skuKode: kode, skuNama: nama,
     pallet: sysPlt, pecahan: sysPec, totalKarton: sysKtn,
     prodate: prodate, quotation: sysQt || '', operator: keeper,
-    keterangan: 'SESUAI', isSelisih: false
+    keterangan: 'SESUAI', isSelisih: false,
+    requestId: Date.now() + '-' + Math.random().toString(36).slice(2, 10)
   };
+  _opnameRowInFlight[rowId] = true;
   showLoading(true);
   gasCall('saveOpname', payload, function() {
+    _opnameRowInFlight[rowId] = false;
     showLoading(false);
     var row = document.getElementById(rowId);
     row.style.borderColor = '#16a34a';
@@ -6601,13 +6645,14 @@ function opnameSesuai(kode, nama, idx, prodate, sysPlt, sysPec, sysKtn, sysQt, s
       '<div style="padding:8px 12px;background:#16a34a20;border-radius:6px;font-size:12px;font-weight:700;color:#16a34a;text-align:center;">✅ SESUAI — ' + sysPlt + 'p + ' + sysPec + 'ktn</div>';
     showToast('✅ Opname sesuai disimpan');
     markOpnameDone(bin);
-  }, function() { showLoading(false); showToast('❌ Gagal simpan'); });
+  }, function() { _opnameRowInFlight[rowId] = false; showLoading(false); showToast('❌ Gagal simpan'); });
 }
 
 function opnameSimpanSelisih(kode, nama, idx, prodateAsli, qtAsli, sysTipe, sysPlt, sysPec, sysKtn) {
+  var rowId      = 'oprow-' + kode + '-' + idx;
+  if (_opnameRowInFlight[rowId]) return;
   var keeper = _getKeeper();
   if (!keeper) { showToast('❌ Isi nama stock keeper dulu'); return; }
-  var rowId      = 'oprow-' + kode + '-' + idx;
   var pltInput   = document.getElementById(rowId + '-plt').value.trim();
   // Baca individual pecahan entries
   var pecEntries = document.querySelectorAll('#' + rowId + '-pec-list .opname-pec-entry');
@@ -6639,10 +6684,13 @@ function opnameSimpanSelisih(kode, nama, idx, prodateAsli, qtAsli, sysTipe, sysP
     pallet: aktualPlt, pecahan: aktualPec, pecahan_list: pecInputEmpty ? null : pecListNonZero, totalKarton: aktualKtn, std: std,
     prodate: aktualProd, quotation: aktualQt, operator: keeper,
     keterangan: 'TIDAK SESUAI | Sistem: ' + sysPlt + 'p/' + sysPec + 'ktn → Aktual: ' + aktualPlt + 'p/' + aktualPec + 'ktn',
-    isSelisih: true, prodateAsli: prodateAsli, quotationAsli: qtAsli, sysPlt: sysPlt, sysPec: sysPec
+    isSelisih: true, prodateAsli: prodateAsli, quotationAsli: qtAsli, sysPlt: sysPlt, sysPec: sysPec,
+    requestId: Date.now() + '-' + Math.random().toString(36).slice(2, 10)
   };
+  _opnameRowInFlight[rowId] = true;
   showLoading(true);
   gasCall('saveOpname', payload, function() {
+    _opnameRowInFlight[rowId] = false;
     showLoading(false);
     var row = document.getElementById(rowId);
     row.style.borderColor = '#f59e0b';
@@ -6651,7 +6699,7 @@ function opnameSimpanSelisih(kode, nama, idx, prodateAsli, qtAsli, sysTipe, sysP
       '<div style="padding:8px 12px;background:#f59e0b20;border-radius:6px;font-size:12px;font-weight:700;color:#f59e0b;text-align:center;">⚠️ DIPERBAIKI — Aktual: ' + aktualPlt + 'p + ' + aktualPec + 'ktn</div>';
     showToast('⚠️ Perbaikan disimpan');
     markOpnameDone(bin);
-  }, function() { showLoading(false); showToast('❌ Gagal simpan'); });
+  }, function() { _opnameRowInFlight[rowId] = false; showLoading(false); showToast('❌ Gagal simpan'); });
 }
 
 
@@ -6750,6 +6798,11 @@ var _p3dScene, _p3dCamera, _p3dRenderer, _p3dControls, _p3dInitDone = false;
 var _p3dInitialCamPos, _p3dInitialTarget;
 var _p3dTHREE, _p3dOrbitControls;
 var _p3dSceneCenter = { x: 20, y: 6, z: 15 }; // fallback sebelum scene ke-build
+var _p3dHighlightRegistry = []; // [{mesh, letters:[...]}] — dipakai buat dim rak lain pas 1 blok dipilih
+var _p3dSelectedLetter = null;
+var _p3dRackInfo = {}; // { A: {x0,x1,z0,z1,segs}, ... } — bounding box & metadata per blok, buat zoom & popup
+var _p3dRaycaster, _p3dPointer, _p3dEventsBound = false;
+var _p3dBinMapRef = {}; // referensi binMap terbaru — dipakai popup detail blok
 var _p3dViewAnim = null; // { fromTarget, toTarget, fromSph, toSph, start, dur } — animasi smooth pindah sudut kamera
 function _p3dEaseInOut(t) { return t < 0.5 ? 2*t*t : -1 + (4-2*t)*t; }
 // ── Helper spherical (radius/theta/phi) relatif ke target — biar animasi kamera muter
@@ -6770,6 +6823,148 @@ function _p3dShortestAngleLerp(a, b, t) {
   while (diff < -Math.PI) diff += Math.PI * 2;
   return a + diff * t;
 }
+
+// ── Highlight per-blok — dim semua instance yang letter-nya beda dari yang dipilih ──
+function _p3dSetHighlight(letter) {
+  if (!_p3dTHREE) return;
+  var white = new _p3dTHREE.Color(1,1,1);
+  var dim   = new _p3dTHREE.Color(0.28,0.28,0.28);
+  _p3dHighlightRegistry.forEach(function(entry) {
+    var mesh = entry.mesh, letters = entry.letters;
+    for (var i = 0; i < letters.length; i++) {
+      mesh.setColorAt(i, (!letter || letters[i] === letter) ? white : dim);
+    }
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  });
+}
+
+// ── Zoom kamera ke satu blok rak, sedikit dari sudut iso biar keliatan 3 sisinya ──
+function _p3dZoomToRack(letter) {
+  var info = _p3dRackInfo[letter];
+  if (!info || !_p3dCamera || !_p3dControls) return;
+  var target = { x: info.cx, y: Math.min(info.maxLevel/2, 5), z: info.cz };
+  var span = Math.max(info.x1 - info.x0, info.z1 - info.z0, info.maxLevel, 6);
+  var dist = span * 1.6;
+  var dir = { x: 0.75, y: 0.6, z: 0.75 };
+  var len = Math.sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
+  var fromTarget = _p3dControls.target.clone();
+  var fromOffset = { x: _p3dCamera.position.x - fromTarget.x, y: _p3dCamera.position.y - fromTarget.y, z: _p3dCamera.position.z - fromTarget.z };
+  var toOffset   = { x: (dir.x/len) * dist, y: (dir.y/len) * dist, z: (dir.z/len) * dist };
+  _p3dViewAnim = {
+    fromTarget: fromTarget, toTarget: target,
+    fromSph: _p3dToSpherical(fromOffset), toSph: _p3dToSpherical(toOffset),
+    start: performance.now(), dur: 550
+  };
+}
+
+// ── Popup detail blok — dipanggil pas klik label ──
+function _p3dShowRackPopup(letter) {
+  var info = _p3dRackInfo[letter];
+  if (!info) return;
+  var used = 0, itemCount = 0;
+  Object.keys(_p3dBinMapRef || {}).forEach(function(binCode) {
+    if (binCode.indexOf(letter) === 0 && /^\d+$/.test(binCode.slice(letter.length))) {
+      var info2 = _p3dBinMapRef[binCode];
+      if (info2 && info2.items) {
+        itemCount += info2.items.length;
+        info2.items.forEach(function(it) {
+          var pecList = (it.pecahan_list && it.pecahan_list.length > 0) ? it.pecahan_list : ((it.pecahan||0) > 0 ? [it.pecahan] : []);
+          used += (it.pallet || 0) + pecList.length;
+        });
+      }
+    }
+  });
+  var box = document.getElementById('peta3d-rack-popup');
+  if (!box) return;
+  box.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
+      '<div style="font-size:18px;font-weight:900;color:#1e3a8a;">📦 BLOK ' + letter + '</div>' +
+      '<div onclick="_p3dClosePopup()" style="cursor:pointer;font-size:20px;color:var(--muted);line-height:1;padding:2px 6px;">✕</div>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;font-size:12px;">' +
+      '<div><span style="color:var(--muted);">Jumlah row</span><br><b>' + info.rowCount + '</b></div>' +
+      '<div><span style="color:var(--muted);">Level tertinggi</span><br><b>' + info.maxLevel + '</b></div>' +
+      '<div><span style="color:var(--muted);">Depth maksimum</span><br><b>' + info.maxDepth + '</b></div>' +
+      '<div><span style="color:var(--muted);">Segmen</span><br><b>' + info.segCount + (info.segCount>1 ? ' (kedalaman beda)' : '') + '</b></div>' +
+      '<div><span style="color:var(--muted);">Total pallet terisi</span><br><b>' + used + ' plt</b></div>' +
+      '<div><span style="color:var(--muted);">Jumlah item SKU</span><br><b>' + itemCount + '</b></div>' +
+    '</div>';
+  box.style.display = 'block';
+}
+function _p3dClosePopup() {
+  var box = document.getElementById('peta3d-rack-popup');
+  if (box) box.style.display = 'none';
+}
+
+// ── Pilih / batalin pilihan blok rak (dipanggil dari klik canvas) ──
+function _p3dSelectRack(letter) {
+  if (_p3dSelectedLetter === letter) return; // udah dipilih, gak usah ulang
+  _p3dSelectedLetter = letter;
+  _p3dSetHighlight(letter);
+  _p3dZoomToRack(letter);
+  _p3dShowRackPopup(letter);
+}
+function _p3dDeselectRack() {
+  if (!_p3dSelectedLetter) return;
+  _p3dSelectedLetter = null;
+  _p3dSetHighlight(null);
+  _p3dClosePopup();
+  if (window.peta3DResetView) window.peta3DResetView();
+}
+
+// ── Setup raycaster buat hover (tooltip) & klik (pilih blok) di canvas Rotate 3D ──
+function _p3dSetupInteraction(canvas) {
+  if (_p3dEventsBound) return;
+  _p3dEventsBound = true;
+  var THREE = _p3dTHREE;
+  _p3dRaycaster = new THREE.Raycaster();
+  _p3dPointer = new THREE.Vector2();
+  var tooltip = document.getElementById('peta3d-hover-tooltip');
+
+  function pickLabel(clientX, clientY) {
+    var rect = canvas.getBoundingClientRect();
+    _p3dPointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    _p3dPointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    _p3dRaycaster.setFromCamera(_p3dPointer, _p3dCamera);
+    var hits = _p3dRaycaster.intersectObjects(_p3dScene.children, true);
+    for (var i = 0; i < hits.length; i++) {
+      if (hits[i].object.userData && hits[i].object.userData.type === 'blockLabel') return hits[i].object.userData.letter;
+    }
+    return null;
+  }
+
+  canvas.addEventListener('mousemove', function(e) {
+    if (!_p3dCamera || !_p3dScene) return;
+    var letter = pickLabel(e.clientX, e.clientY);
+    if (letter) {
+      var info = _p3dRackInfo[letter];
+      tooltip.innerHTML = '<b>BLOK ' + letter + '</b> · ' + (info ? info.rowCount + ' row · depth ' + info.maxDepth + ' · level ' + info.maxLevel : '');
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top  = (e.clientY + 10) + 'px';
+      tooltip.style.display = 'block';
+      canvas.style.cursor = 'pointer';
+    } else {
+      tooltip.style.display = 'none';
+      canvas.style.cursor = '';
+    }
+  });
+  canvas.addEventListener('mouseleave', function() { tooltip.style.display = 'none'; });
+
+  var _tapStartX = 0, _tapStartY = 0;
+  canvas.addEventListener('pointerdown', function(e) { _tapStartX = e.clientX; _tapStartY = e.clientY; });
+  canvas.addEventListener('pointerup', function(e) {
+    // Cuma anggap "klik" kalau gak geser jauh (biar gak konflik sama drag-rotate OrbitControls)
+    if (Math.abs(e.clientX - _tapStartX) > 6 || Math.abs(e.clientY - _tapStartY) > 6) return;
+    if (!_p3dCamera || !_p3dScene) return;
+    var letter = pickLabel(e.clientX, e.clientY);
+    if (letter) {
+      _p3dSelectRack(letter);
+    } else if (_p3dSelectedLetter) {
+      _p3dDeselectRack(); // klik area kosong pas ada rak terpilih → balik ke tampilan penuh
+    }
+  });
+}
+
 // ── Sprite label nama blok ("BLOK A" dst) ngambang di atas rak, di scene Rotate 3D ──
 function _p3dMakeLabelSprite(text, opts) {
   opts = opts || {};
@@ -6877,6 +7072,7 @@ async function _p3dInitRotateView() {
   dirLight.position.set(30,50,20);
   _p3dScene.add(dirLight);
   resize();
+  _p3dSetupInteraction(canvas);
   _p3dBuildRotateScene();
   _p3dInitDone = true;
   _p3dInitialCamPos = _p3dCamera.position.clone();
@@ -7005,8 +7201,13 @@ function _p3dBuildRotateScene() {
   }));
   // Simpan titik tengah scene — dipakai buat snap preset view (viewcube AutoCAD-style)
   _p3dSceneCenter = { x: globalMaxX/2, y: 6, z: globalMaxZ/2 };
+  _p3dRackInfo = {}; // reset tiap build ulang scene
+  _p3dSelectedLetter = null;
+  _p3dHighlightRegistry = [];
+  var _p3dWhite = new THREE.Color(1,1,1);
+  var _p3dDim   = new THREE.Color(0.28,0.28,0.28);
 
-  // ── Label nama blok ("BLOK A", "BLOK B", dst) ngambang di atas tiap rak ──
+  // ── Label nama blok ("BLOK A", "BLOK B", dst) ngambang di atas tiap rak — bisa diklik/hover ──
   var labelsGroup = new THREE.Group();
   _p3dScene.add(labelsGroup);
   LAYOUT_ORDER.forEach(function(l) {
@@ -7015,8 +7216,17 @@ function _p3dBuildRotateScene() {
     var nxRaw = Math.max.apply(null, s.map(function(x){return x.rowTo - o + 1;}));
     var iShift = (l === 'I') ? 9 : 0;
     var label = _p3dMakeLabelSprite('BLOK ' + l);
-    label.position.set(nxRaw/2 + iShift, maxLevel(l) + 2.5, rackMeta[l].start + maxDepth(l)/2);
+    var cx = nxRaw/2 + iShift, cz = rackMeta[l].start + maxDepth(l)/2;
+    label.position.set(cx, maxLevel(l) + 2.5, cz);
+    label.userData = { type: 'blockLabel', letter: l };
     labelsGroup.add(label);
+    _p3dRackInfo[l] = {
+      cx: cx, cz: cz,
+      x0: 0, x1: nxRaw + iShift,
+      z0: rackMeta[l].start, z1: rackMeta[l].start + maxDepth(l),
+      maxLevel: maxLevel(l), maxDepth: maxDepth(l), rowCount: nxRaw,
+      segCount: s.length
+    };
   });
 
   var floorPad = 3;
@@ -7118,6 +7328,7 @@ function _p3dBuildRotateScene() {
     binMap[r.binLoc].used += (r.pallet || 0) + pecListInit.length;
     binMap[r.binLoc].items.push(r);
   });
+  _p3dBinMapRef = binMap; // simpan referensi buat popup detail blok (klik label)
 
   // ── Bin tambahan (T) — KOSONG: cuma lantai + border kuning (gak ada kotak).
   // TERISI: render pallet asli lengkap (kotak barang + alas pallet), sama kayak rak biasa. ──
@@ -7248,8 +7459,8 @@ function _p3dBuildRotateScene() {
       var ny = seg.depth, nz = seg.level;
       var iBackAlign = (letter === 'I' && seg.rowFrom >= 28);
       var zBaseEff = iBackAlign ? (zBase + (rackDepth - ny)) : (zBase + _gFrontAlignOffset(letter, segs, seg));
-      postData.push({ x: finalX,   zBase: zBaseEff, depth: ny, levels: nz });
-      postData.push({ x: finalX+1, zBase: zBaseEff, depth: ny, levels: nz });
+      postData.push({ x: finalX,   zBase: zBaseEff, depth: ny, levels: nz, letter: letter });
+      postData.push({ x: finalX+1, zBase: zBaseEff, depth: ny, levels: nz, letter: letter });
       shadowInstances.push({ x: finalX, z: zBaseEff, depth: ny });
     });
   });
@@ -7300,7 +7511,7 @@ function _p3dBuildRotateScene() {
         var colorInt = parseInt(colorHex.replace('#','0x'));
         for (var u=0; u<units && slotPtr<order.length; u++, slotPtr++) {
           var depthIdx = isMir(letter) ? (ny-1-order[slotPtr][0]) : order[slotPtr][0];
-          boxData.push({ x: finalX, y: order[slotPtr][1], z: zBaseEff+depthIdx, color: colorInt });
+          boxData.push({ x: finalX, y: order[slotPtr][1], z: zBaseEff+depthIdx, color: colorInt, letter: letter });
           totalBoxes++;
         }
       });
@@ -7309,18 +7520,20 @@ function _p3dBuildRotateScene() {
   function isMir(l){ return MIRRORED.indexOf(l) !== -1; }
 
   var postGeo = new THREE.BoxGeometry(0.06, 1, 0.06);
-  var postMat = new THREE.MeshBasicMaterial({ color: 0x1e3a8a });
+  var postMat = new THREE.MeshBasicMaterial({ color: 0x1e3a8a, vertexColors: true });
   var postInstances = [];
   postData.forEach(function(p) {
-    postInstances.push({ x:p.x, z:p.zBase, h:p.levels });
-    postInstances.push({ x:p.x, z:p.zBase+p.depth, h:p.levels });
+    postInstances.push({ x:p.x, z:p.zBase, h:p.levels, letter:p.letter });
+    postInstances.push({ x:p.x, z:p.zBase+p.depth, h:p.levels, letter:p.letter });
   });
   var postMesh = new THREE.InstancedMesh(postGeo, postMat, postInstances.length || 1);
   postInstances.forEach(function(pi, i) {
     mtx.compose(new THREE.Vector3(pi.x, pi.h/2, pi.z), identityQuat, new THREE.Vector3(1, pi.h, 1));
     postMesh.setMatrixAt(i, mtx);
+    postMesh.setColorAt(i, _p3dWhite);
   });
   framesGroup.add(postMesh);
+  _p3dHighlightRegistry.push({ mesh: postMesh, letters: postInstances.map(function(pi){ return pi.letter; }) });
 
   var beamInstances = [];
   LAYOUT_ORDER.forEach(function(letter) {
@@ -7347,19 +7560,21 @@ function _p3dBuildRotateScene() {
       var iShiftB = (letter === 'I') ? 9 : 0;
       var fx = p.sx + iShiftB;
       for (var lvl2=0; lvl2<=lvls; lvl2++) {
-        beamInstances.push({ x:fx,   y:lvl2, z:p.zBaseEff+p.depth/2, depth:p.depth });
-        beamInstances.push({ x:fx+1, y:lvl2, z:p.zBaseEff+p.depth/2, depth:p.depth });
+        beamInstances.push({ x:fx,   y:lvl2, z:p.zBaseEff+p.depth/2, depth:p.depth, letter: letter });
+        beamInstances.push({ x:fx+1, y:lvl2, z:p.zBaseEff+p.depth/2, depth:p.depth, letter: letter });
       }
     });
   });
   var beamGeo = new THREE.BoxGeometry(0.07, 0.09, 1);
-  var beamMat = new THREE.MeshStandardMaterial({ color: 0xc2410c, roughness:0.5 });
+  var beamMat = new THREE.MeshStandardMaterial({ color: 0xc2410c, roughness:0.5, vertexColors: true });
   var beamMesh = new THREE.InstancedMesh(beamGeo, beamMat, beamInstances.length || 1);
   beamInstances.forEach(function(bi, i) {
     mtx.compose(new THREE.Vector3(bi.x, bi.y, bi.z), identityQuat, new THREE.Vector3(1,1,bi.depth));
     beamMesh.setMatrixAt(i, mtx);
+    beamMesh.setColorAt(i, _p3dWhite);
   });
   framesGroup.add(beamMesh);
+  _p3dHighlightRegistry.push({ mesh: beamMesh, letters: beamInstances.map(function(bi){ return bi.letter; }) });
 
   var beamXInstances = [];
   LAYOUT_ORDER.forEach(function(letter) {
@@ -7387,35 +7602,39 @@ function _p3dBuildRotateScene() {
       var fx = p.sx + iShiftB;
       for (var lvl2=0; lvl2<lvls; lvl2++) {
         for (var d=2; d<=p.depth; d+=2) {
-          beamXInstances.push({ x:fx+0.5, y:lvl2, z:p.zBaseEff + d - 0.5 });
+          beamXInstances.push({ x:fx+0.5, y:lvl2, z:p.zBaseEff + d - 0.5, letter: letter });
         }
       }
     });
   });
   var beamXGeo = new THREE.BoxGeometry(1, 0.09, 0.07);
-  var beamXMat = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness:0.5 });
+  var beamXMat = new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness:0.5, vertexColors: true });
   var beamXMesh = new THREE.InstancedMesh(beamXGeo, beamXMat, beamXInstances.length || 1);
   beamXInstances.forEach(function(bi, i) {
     mtx.compose(new THREE.Vector3(bi.x, bi.y, bi.z), identityQuat, new THREE.Vector3(1,1,1));
     beamXMesh.setMatrixAt(i, mtx);
+    beamXMesh.setColorAt(i, _p3dWhite);
   });
   framesGroup.add(beamXMesh);
+  _p3dHighlightRegistry.push({ mesh: beamXMesh, letters: beamXInstances.map(function(bi){ return bi.letter; }) });
 
   var byColor = {};
   boxData.forEach(function(b){ (byColor[b.color] = byColor[b.color]||[]).push(b); });
   var boxGeo = new THREE.BoxGeometry(0.86, 0.8, 0.86);
   var palletGeo = new THREE.BoxGeometry(0.9, 0.12, 0.9);
-  var palletMat = new THREE.MeshStandardMaterial({ color: PALLET_COLOR, roughness:0.8 });
+  var palletMat = new THREE.MeshStandardMaterial({ color: PALLET_COLOR, roughness:0.8, vertexColors: true });
   Object.keys(byColor).forEach(function(colorKey) {
     var arr = byColor[colorKey];
-    var mat = new THREE.MeshStandardMaterial({ color: parseInt(colorKey), roughness:0.6 });
+    var mat = new THREE.MeshStandardMaterial({ color: parseInt(colorKey), roughness:0.6, vertexColors: true });
     var mesh = new THREE.InstancedMesh(boxGeo, mat, arr.length);
     arr.forEach(function(b, i) {
       dummy.position.set(b.x + 0.5, b.y + 0.5 + 0.06, b.z + 0.5);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
+      mesh.setColorAt(i, _p3dWhite);
     });
     boxesGroup.add(mesh);
+    _p3dHighlightRegistry.push({ mesh: mesh, letters: arr.map(function(b){ return b.letter; }) });
   });
   if (boxData.length) {
     var palletMesh = new THREE.InstancedMesh(palletGeo, palletMat, boxData.length);
@@ -7423,8 +7642,10 @@ function _p3dBuildRotateScene() {
       dummy.position.set(b.x + 0.5, b.y + 0.06, b.z + 0.5);
       dummy.updateMatrix();
       palletMesh.setMatrixAt(i, dummy.matrix);
+      palletMesh.setColorAt(i, _p3dWhite);
     });
     boxesGroup.add(palletMesh);
+    _p3dHighlightRegistry.push({ mesh: palletMesh, letters: boxData.map(function(b){ return b.letter; }) });
 
     var hx=0.43, hy=0.4, hz=0.43;
     var corners = [
