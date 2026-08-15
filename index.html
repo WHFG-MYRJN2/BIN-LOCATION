@@ -7080,7 +7080,11 @@ function _p3dSetupInteraction(canvas) {
     var popupOpen = popupBox && popupBox.style.display === 'block';
 
     if (!target || !target.letter) {
-      if (popupOpen) _p3dClosePopup(); // klik area kosong pas popup lagi kebuka → tutup
+      if (popupOpen) {
+        _p3dClosePopup(); // klik pertama di area kosong pas popup lagi kebuka → cuma tutup popup dulu
+      } else if (_p3dSelectedLetter && window.peta3DResetView) {
+        window.peta3DResetView(); // popup udah ketutup → klik area kosong berikutnya balik ke tampilan awal
+      }
       return;
     }
 
@@ -7097,7 +7101,9 @@ function _p3dSetupInteraction(canvas) {
       // (otomatis ganti popup lama kalau lagi kebuka juga) ──
       _p3dShowBinPopup(target.binCode, target.letter);
     } else if (popupOpen) {
-      _p3dClosePopup(); // klik struktur kosong di blok yang sama pas popup lagi kebuka → tutup
+      _p3dClosePopup(); // klik struktur kosong di blok yang sama pas popup lagi kebuka → tutup dulu
+    } else if (window.peta3DResetView) {
+      window.peta3DResetView(); // klik struktur kosong, popup udah ketutup → balik ke tampilan awal
     }
   });
 }
