@@ -6972,6 +6972,16 @@ function _p3dSetupInteraction(canvas) {
     });
   }
 
+  // Pengaman ekstra — klik di luar canvas 3D DAN di luar popup itu sendiri (misal ke tombol
+  // viewcube atau UI lain di sekitar) juga otomatis nutup popup yang lagi kebuka.
+  document.addEventListener('click', function(e) {
+    var popupBox = document.getElementById('peta3d-rack-popup');
+    if (!popupBox || popupBox.style.display !== 'block') return;
+    if (popupBox.contains(e.target)) return;       // klik di dalam popup sendiri, biarin (X button udah handle sendiri)
+    if (canvas.contains(e.target)) return;          // canvas punya logic buka/tutup sendiri, jangan dobel-handle
+    _p3dClosePopup();
+  });
+
   // Cari blok/bin yang lagi ditunjuk kursor — cek label sprite ATAU rak asli (post/beam/box/pallet)
   // lewat instanceId. Kalau instance itu punya binCode (kotak isi barang), prioritaskan info per-bin
   // (kayak mode Aktual). Kalau nggak (post/beam struktur, atau bin kosong), fallback ke info per-blok.
@@ -7064,20 +7074,28 @@ function _p3dSetupInteraction(canvas) {
   canvas.addEventListener('click', function(e) {
     if (!_p3dCamera || !_p3dScene) return;
     var target = pickRackTarget(e.clientX, e.clientY);
-    if (!target || !target.letter) return; // klik area kosong / struktur tanpa rak → gak ngapa-ngapain
+    var popupBox = document.getElementById('peta3d-rack-popup');
+    var popupOpen = popupBox && popupBox.style.display === 'block';
+
+    if (!target || !target.letter) {
+      if (popupOpen) _p3dClosePopup(); // klik area kosong pas popup lagi kebuka → tutup
+      return;
+    }
 
     if (!_p3dSelectedLetter) {
       // ── Tahap 1: belum ada blok yang dipilih → klik di mana aja di blok itu (bin/label/struktur)
       // langsung SELECT & ZOOM ke seluruh blok itu, TANPA popup ──
       _p3dSelectRack(target.letter);
     } else if (target.binCode) {
-      // ── Tahap 2: udah ada blok yang dipilih → klik BIN spesifik → tampilkan popup detail ──
+      // ── Tahap 2: udah ada blok yang dipilih → klik BIN spesifik → tampilkan popup detail
+      // (otomatis ganti popup lama kalau lagi kebuka juga) ──
       _p3dShowBinPopup(target.binCode, target.letter);
     } else if (target.letter !== _p3dSelectedLetter) {
       // Klik blok LAIN (bukan bin) pas masih dalam mode terpilih → pindah pilihan ke blok itu
       _p3dSelectRack(target.letter);
+    } else if (popupOpen) {
+      _p3dClosePopup(); // klik struktur kosong di blok yang sama pas popup lagi kebuka → tutup
     }
-    // Klik struktur kosong (post/beam) di blok yang lagi dipilih → gak ngapa-ngapain
   });
 }
 
@@ -7398,7 +7416,11 @@ function _p3dBuildRotateScene() {
     { x: 36.5, z: 64 },
     { x: 52, z: 64 },
     { x: 52, z: 74 },
-    { x: -3, z: 74 }
+    { x: 36, z: 74 },
+    { x: 36, z: 72.5 },
+    { x: 24, z: 72.5 },
+    { x: 24, z: 70.5 },
+    { x: -3, z: 70.5 }
   ];
   var outlineLinePts = [];
   for (var oi = 0; oi < outlineCorners.length; oi++) {
@@ -7451,7 +7473,7 @@ function _p3dBuildRotateScene() {
 
   // ── Pejalan kaki — koordinat FIXED hasil tuning manual Bos lewat editor ──
   var WALK_STRIPS = [
-    { cx:14, cz:6.5, w:28, d:0.6 },
+    { cx:14.3, cz:6.5, w:29.2, d:0.6 },
     { cx:12.5, cz:10.6, w:26.200000000000003, d:0.6 },
     { cx:12.5, cz:22.65, w:26.200000000000003, d:0.6 },
     { cx:12.5, cz:26.8, w:26.200000000000003, d:0.6 },
@@ -7459,10 +7481,10 @@ function _p3dBuildRotateScene() {
     { cx:12.5, cz:39.9, w:26.200000000000003, d:0.6 },
     { cx:18, cz:52, w:36.6, d:0.6 },
     { cx:18, cz:56.2, w:36.6, d:0.6 },
-    { cx:20.3, cz:67.1, w:40.8, d:0.6 },
+    { cx:20.3, cz:67.2, w:40.8, d:0.6 },
     { cx:46.1, cz:69.2, w:12, d:0.6 },
     { cx:25.4, cz:29, w:0.6, d:45.6 },
-    { cx:-0.5, cz:33.7, w:0.6, d:67.5 },
+    { cx:-0.4, cz:33.8, w:0.6, d:67.5 },
     { cx:40.4, cz:68.5, w:0.6, d:2 }
   ];
   WALK_STRIPS.forEach(function(s) { addWalkStrip(s.cx, s.cz, s.w, s.d); });
