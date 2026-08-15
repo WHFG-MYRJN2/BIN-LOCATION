@@ -7050,12 +7050,12 @@ function _p3dSetupInteraction(canvas) {
     _lastHoverCheck = now;
     if (!_p3dCamera || !_p3dScene) return;
     var target = pickRackTarget(e.clientX, e.clientY);
-    // Tooltip detail cuma muncul kalau UDAH ada rak yang dipilih (sesuai permintaan) —
-    // sebelum pilih rak, kursor tetap berubah jadi pointer aja (biar tau bisa diklik).
-    if (target && _p3dSelectedLetter) {
+    // Tooltip detail cuma muncul kalau UDAH ada rak yang dipilih, DAN yang di-hover itu
+    // bagian dari blok yang SAMA (blok lain yang lagi redup gak munculin tooltip apapun).
+    if (target && target.letter && _p3dSelectedLetter && target.letter === _p3dSelectedLetter) {
       if (target.binCode) {
         tooltip.innerHTML = _p3dFormatBinTooltip(target.binCode);
-      } else if (target.letter) {
+      } else {
         var info = _p3dRackInfo[target.letter];
         tooltip.innerHTML = '<b>BLOK ' + target.letter + '</b> · ' + (info ? info.rowCount + ' row · depth ' + info.maxDepth + ' · level ' + info.maxLevel : '');
       }
@@ -7065,6 +7065,8 @@ function _p3dSetupInteraction(canvas) {
     } else {
       tooltip.style.display = 'none';
     }
+    // Kursor pointer tetap muncul buat SEMUA blok (bukan cuma yang dipilih) — biar user
+    // tau blok lain itu tetap bisa diklik buat pindah sorotan.
     canvas.style.cursor = target ? 'pointer' : '';
   });
   canvas.addEventListener('mouseleave', function() { tooltip.style.display = 'none'; });
@@ -7086,13 +7088,14 @@ function _p3dSetupInteraction(canvas) {
       // ── Tahap 1: belum ada blok yang dipilih → klik di mana aja di blok itu (bin/label/struktur)
       // langsung SELECT & ZOOM ke seluruh blok itu, TANPA popup ──
       _p3dSelectRack(target.letter);
+    } else if (target.letter !== _p3dSelectedLetter) {
+      // Klik blok LAIN (bin atau bukan) pas masih dalam mode terpilih → PINDAH sorotan ke blok itu
+      // dulu (zoom ke blok baru), TANPA popup — prioritas di atas cek binCode di bawah.
+      _p3dSelectRack(target.letter);
     } else if (target.binCode) {
-      // ── Tahap 2: udah ada blok yang dipilih → klik BIN spesifik → tampilkan popup detail
+      // ── Tahap 2: klik BIN spesifik di blok yang SAMA yang udah dipilih → tampilkan popup detail
       // (otomatis ganti popup lama kalau lagi kebuka juga) ──
       _p3dShowBinPopup(target.binCode, target.letter);
-    } else if (target.letter !== _p3dSelectedLetter) {
-      // Klik blok LAIN (bukan bin) pas masih dalam mode terpilih → pindah pilihan ke blok itu
-      _p3dSelectRack(target.letter);
     } else if (popupOpen) {
       _p3dClosePopup(); // klik struktur kosong di blok yang sama pas popup lagi kebuka → tutup
     }
@@ -7412,8 +7415,8 @@ function _p3dBuildRotateScene() {
     { x: 0, z: -1 },
     { x: 29.5, z: -1 },
     { x: 29.5, z: 47 },
-    { x: 36.5, z: 47 },
-    { x: 36.5, z: 64 },
+    { x: 37, z: 47 },
+    { x: 37, z: 64 },
     { x: 52, z: 64 },
     { x: 52, z: 74 },
     { x: 36, z: 74 },
