@@ -6809,6 +6809,7 @@ var _p3dSelectedLetter = null;
 var _p3dRackInfo = {}; // { A: {x0,x1,z0,z1,segs}, ... } — bounding box & metadata per blok, buat zoom & popup
 var _p3dRaycaster, _p3dPointer, _p3dEventsBound = false;
 var _p3dHitboxGroup = null; // kotak invisible per blok — target klik/hover yang reliable
+var _p3dTBinHitGroup = null; // kotak invisible per bin tambahan (T1-T36) — sama tujuannya
 var _p3dSceneSpan = { x: 20, z: 15 }; // total lebar/dalam scene — dipakai hitung rasio zoom-in per blok
 var _p3dBinMapRef = {}; // referensi binMap terbaru — dipakai popup detail blok
 var _p3dBinCapRef = {}; // { binCode: capacity } — kapasitas slot per-bin (depth × level), buat hover detail
@@ -6874,7 +6875,7 @@ function _p3dZoomToRack(letter) {
 // ── Popup detail BIN individual (bukan seluruh blok) — dipanggil pas klik kotak isi barang ──
 function _p3dShowBinPopup(binCode, letter) {
   var info = _p3dBinMapRef[binCode];
-  var cap  = _p3dBinCapRef[binCode] || 0;
+  var cap  = _p3dBinCapRef[binCode] || (T_BIN_NAMES[binCode] ? T_BIN_NAMES[binCode].cap : 0) || 0;
   var used = 0;
   if (info && info.items) info.items.forEach(function(it) {
     var pecList = (it.pecahan_list && it.pecahan_list.length > 0) ? it.pecahan_list : ((it.pecahan||0) > 0 ? [it.pecahan] : []);
@@ -7010,6 +7011,13 @@ function _p3dSetupInteraction(canvas) {
     for (var i = 0; i < labelHits.length; i++) {
       var obj = labelHits[i].object;
       if (obj.userData && obj.userData.type === 'blockLabel') return { letter: obj.userData.letter, binCode: null };
+      if (obj.userData && obj.userData.type === 'tbinLabel') return { letter: null, binCode: obj.userData.label, isTBin: true };
+    }
+
+    // 2b) Cek hitbox bin tambahan (T1-T36) — bin tunggal, klik langsung tunjukin detailnya
+    if (_p3dTBinHitGroup) {
+      var tbHits = _p3dRaycaster.intersectObjects(_p3dTBinHitGroup.children, false);
+      if (tbHits.length) return { letter: null, binCode: tbHits[0].object.userData.label, isTBin: true };
     }
 
     // 3) Fallback paling robust — kotak hitbox invisible yang ngebungkus seluruh blok
@@ -7023,7 +7031,7 @@ function _p3dSetupInteraction(canvas) {
 
   function _p3dFormatBinTooltip(binCode) {
     var info = _p3dBinMapRef[binCode];
-    var cap  = _p3dBinCapRef[binCode] || 0;
+    var cap  = _p3dBinCapRef[binCode] || (T_BIN_NAMES[binCode] ? T_BIN_NAMES[binCode].cap : 0) || 0;
     var used = 0;
     if (info && info.items) info.items.forEach(function(it) {
       var pecList = (it.pecahan_list && it.pecahan_list.length > 0) ? it.pecahan_list : ((it.pecahan||0) > 0 ? [it.pecahan] : []);
@@ -7050,9 +7058,14 @@ function _p3dSetupInteraction(canvas) {
     _lastHoverCheck = now;
     if (!_p3dCamera || !_p3dScene) return;
     var target = pickRackTarget(e.clientX, e.clientY);
-    // Tooltip detail cuma muncul kalau UDAH ada rak yang dipilih, DAN yang di-hover itu
-    // bagian dari blok yang SAMA (blok lain yang lagi redup gak munculin tooltip apapun).
-    if (target && target.letter && _p3dSelectedLetter && target.letter === _p3dSelectedLetter) {
+    // Tooltip detail muncul kalau: (a) lagi hover bin tambahan T (independen, selalu aktif), atau
+    // (b) UDAH ada rak A-I yang dipilih DAN yang di-hover itu bagian dari blok yang SAMA.
+    if (target && target.isTBin) {
+      tooltip.innerHTML = _p3dFormatBinTooltip(target.binCode);
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top  = (e.clientY + 10) + 'px';
+      tooltip.style.display = 'block';
+    } else if (target && target.letter && _p3dSelectedLetter && target.letter === _p3dSelectedLetter) {
       if (target.binCode) {
         tooltip.innerHTML = _p3dFormatBinTooltip(target.binCode);
       } else {
@@ -7079,12 +7092,18 @@ function _p3dSetupInteraction(canvas) {
     var popupBox = document.getElementById('peta3d-rack-popup');
     var popupOpen = popupBox && popupBox.style.display === 'block';
 
-    if (!target || !target.letter) {
+    if (!target || (!target.letter && !target.isTBin)) {
       if (popupOpen) {
         _p3dClosePopup(); // klik pertama di area kosong pas popup lagi kebuka → cuma tutup popup dulu
       } else if (_p3dSelectedLetter && window.peta3DResetView) {
         window.peta3DResetView(); // popup udah ketutup → klik area kosong berikutnya balik ke tampilan awal
       }
+      return;
+    }
+
+    if (target.isTBin) {
+      // Bin tambahan (T1-T36) — 1 unit sendiri, langsung tunjukin popup detail tanpa perlu "pilih blok" dulu
+      _p3dShowBinPopup(target.binCode, null);
       return;
     }
 
@@ -7203,9 +7222,9 @@ async function _p3dInitRotateView() {
     _p3dCamera.updateProjectionMatrix();
   }
   window.addEventListener('resize', resize);
-  _p3dCamera.position.set(50,45,70);
+  _p3dCamera.position.set(50,45,70); // placeholder sementara — ke-override abis scene ke-build (lihat di bawah)
   _p3dControls = new _p3dOrbitControls(_p3dCamera, _p3dRenderer.domElement);
-  _p3dControls.target.set(20,0,15);
+  _p3dControls.target.set(20,0,15); // placeholder sementara juga
   _p3dControls.enableDamping = true;
   _p3dControls.minPolarAngle = 0.05;
   _p3dControls.maxPolarAngle = Math.PI * 0.5; // izinkan persis 90° (horizontal) buat preset front/back/left/right
@@ -7221,6 +7240,22 @@ async function _p3dInitRotateView() {
   resize();
   _p3dSetupInteraction(canvas);
   _p3dBuildRotateScene();
+  // ── Sudut pandang awal — ISO tapi diputar 180° dari ISO biasa di viewcube ({1,0.85,1} → {-1,0.85,-1}),
+  // dihitung dari titik tengah scene (sama sistemnya kayak preset klik lainnya) ──
+  (function() {
+    var initDir = { x: -1, y: 0.85, z: -1 };
+    var initLen = Math.sqrt(initDir.x*initDir.x + initDir.y*initDir.y + initDir.z*initDir.z);
+    var initDist = Math.max(_p3dSceneSpan.x, _p3dSceneSpan.z, 20) * 1.3;
+    var c = _p3dSceneCenter;
+    _p3dCamera.position.set(
+      c.x + (initDir.x/initLen) * initDist,
+      c.y + (initDir.y/initLen) * initDist,
+      c.z + (initDir.z/initLen) * initDist
+    );
+    _p3dControls.target.set(c.x, c.y, c.z);
+    _p3dCamera.zoom = 1;
+    _p3dCamera.updateProjectionMatrix();
+  })();
   _p3dInitDone = true;
   _p3dInitialCamPos = _p3dCamera.position.clone();
   _p3dInitialTarget = _p3dControls.target.clone();
@@ -7359,6 +7394,7 @@ function _p3dBuildRotateScene() {
   _p3dSceneCenter = { x: globalMaxX/2, y: 6, z: globalMaxZ/2 };
   _p3dSceneSpan = { x: globalMaxX, z: globalMaxZ };
   _p3dRackInfo = {}; // reset tiap build ulang scene
+  _p3dTBinHitGroup = null; // reset juga, biar dibuat ulang fresh tiap build
   _p3dSelectedLetter = null;
   _p3dHighlightRegistry = [];
   var _p3dWhite = new THREE.Color(1,1,1);
@@ -7556,7 +7592,18 @@ function _p3dBuildRotateScene() {
 
     var lbl = _p3dMakeLabelSprite(label, { canvasW: 100, canvasH: 50, fontPx: 22, scale: [1.8, 0.9, 1], bg: 'rgba(120,80,30,0.85)', border: 'rgba(255,255,255,0.6)' });
     lbl.position.set(cx, hasItems ? 1.6 : 0.5, cz);
+    lbl.userData = { type: 'tbinLabel', label: label };
     labelsGroup.add(lbl);
+
+    // Hitbox invisible — target klik/hover yang reliable (sama pola kayak blok A-I)
+    if (!_p3dTBinHitGroup) { _p3dTBinHitGroup = new THREE.Group(); _p3dScene.add(_p3dTBinHitGroup); }
+    var tHitMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(w, 2.2, d),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    tHitMesh.position.set(cx, 1.1, cz);
+    tHitMesh.userData = { type: 'tbinHitbox', label: label };
+    _p3dTBinHitGroup.add(tHitMesh);
   }
   var T_BIN_POSITIONS = [
     { label:"T1", cx:12.5, cz:7.5, w:25, d:1 },
