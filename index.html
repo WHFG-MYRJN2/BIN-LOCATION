@@ -6835,16 +6835,41 @@ function _p3dShortestAngleLerp(a, b, t) {
 }
 
 // ── Highlight per-blok — dim semua instance yang letter-nya beda dari yang dipilih ──
+// ── Aktifin transparansi PER-INSTANCE di InstancedMesh (Three.js gak dukung ini bawaan —
+// setColorAt cuma bisa tint warna, gak ada alpha). Ini nyuntik custom attribute + shader
+// biar tiap instance bisa punya alpha sendiri-sendiri, dipakai buat efek "rak lain transparan". ──
+function _p3dEnableInstanceAlpha(mesh, count) {
+  var THREE = _p3dTHREE;
+  var alphas = new Float32Array(count).fill(1);
+  var attr = new THREE.InstancedBufferAttribute(alphas, 1);
+  mesh.geometry.setAttribute('instanceAlpha', attr);
+  mesh.material.transparent = true;
+  mesh.material.depthWrite = false; // biar gak nutupin objek di belakangnya pas transparan
+  mesh.material.onBeforeCompile = function(shader) {
+    shader.vertexShader = 'attribute float instanceAlpha;\nvarying float vInstanceAlpha;\n' + shader.vertexShader;
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\nvInstanceAlpha = instanceAlpha;'
+    );
+    shader.fragmentShader = 'varying float vInstanceAlpha;\n' + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <dithering_fragment>',
+      '#include <dithering_fragment>\ngl_FragColor.a *= vInstanceAlpha;'
+    );
+  };
+  mesh.userData.alphaAttr = attr;
+}
+
 function _p3dSetHighlight(letter) {
   if (!_p3dTHREE) return;
-  var white = new _p3dTHREE.Color(1,1,1);
-  var dim   = new _p3dTHREE.Color(0.1,0.1,0.11); // dikuatin biar rak lain keliatan jauh lebih pudar/transparan
   _p3dHighlightRegistry.forEach(function(entry) {
     var mesh = entry.mesh, letters = entry.letters;
+    var alphaAttr = mesh.userData.alphaAttr;
+    if (!alphaAttr) return;
     for (var i = 0; i < letters.length; i++) {
-      mesh.setColorAt(i, (!letter || letters[i] === letter) ? white : dim);
+      alphaAttr.array[i] = (!letter || letters[i] === letter) ? 1 : 0.08; // rak lain jadi beneran transparan
     }
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    alphaAttr.needsUpdate = true;
   });
 }
 
@@ -7486,7 +7511,7 @@ function _p3dBuildRotateScene() {
   var dockLabel = _p3dMakeLabelSprite('🚚 LOADING DOCK', {
     canvasW: 420, canvasH: 110, fontPx: 42, scale: [11, 3, 1]
   });
-  dockLabel.position.set(-floorPad - 3, 6, globalMaxZ/2);
+  dockLabel.position.set(-floorPad - 9, 6, globalMaxZ/2);
   labelsGroup.add(dockLabel);
 
   var LOKAL_COLORS = [0xff0000,0xf7ff00,0x19e619,0x3b82f6,0xf97316,0xefefef];
@@ -7766,6 +7791,7 @@ function _p3dBuildRotateScene() {
   });
   if (postMesh.instanceColor) postMesh.instanceColor.needsUpdate = true;
   framesGroup.add(postMesh);
+  _p3dEnableInstanceAlpha(postMesh, postInstances.length || 1);
   _p3dHighlightRegistry.push({ mesh: postMesh, letters: postInstances.map(function(pi){ return pi.letter; }) });
 
   var beamInstances = [];
@@ -7808,6 +7834,7 @@ function _p3dBuildRotateScene() {
   });
   if (beamMesh.instanceColor) beamMesh.instanceColor.needsUpdate = true;
   framesGroup.add(beamMesh);
+  _p3dEnableInstanceAlpha(beamMesh, beamInstances.length || 1);
   _p3dHighlightRegistry.push({ mesh: beamMesh, letters: beamInstances.map(function(bi){ return bi.letter; }) });
 
   var beamXInstances = [];
@@ -7851,6 +7878,7 @@ function _p3dBuildRotateScene() {
   });
   if (beamXMesh.instanceColor) beamXMesh.instanceColor.needsUpdate = true;
   framesGroup.add(beamXMesh);
+  _p3dEnableInstanceAlpha(beamXMesh, beamXInstances.length || 1);
   _p3dHighlightRegistry.push({ mesh: beamXMesh, letters: beamXInstances.map(function(bi){ return bi.letter; }) });
 
   var byColor = {};
@@ -7870,6 +7898,7 @@ function _p3dBuildRotateScene() {
     });
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     boxesGroup.add(mesh);
+    _p3dEnableInstanceAlpha(mesh, arr.length || 1);
     _p3dHighlightRegistry.push({ mesh: mesh, letters: arr.map(function(b){ return b.letter; }), binCodes: arr.map(function(b){ return b.binCode; }) });
   });
   if (boxData.length) {
@@ -7882,6 +7911,7 @@ function _p3dBuildRotateScene() {
     });
     if (palletMesh.instanceColor) palletMesh.instanceColor.needsUpdate = true;
     boxesGroup.add(palletMesh);
+    _p3dEnableInstanceAlpha(palletMesh, boxData.length || 1);
     _p3dHighlightRegistry.push({ mesh: palletMesh, letters: boxData.map(function(b){ return b.letter; }), binCodes: boxData.map(function(b){ return b.binCode; }) });
 
     var hx=0.43, hy=0.4, hz=0.43;
