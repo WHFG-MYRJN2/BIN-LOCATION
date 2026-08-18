@@ -6843,8 +6843,11 @@ function _p3dEnableInstanceAlpha(mesh, count) {
   var alphas = new Float32Array(count).fill(1);
   var attr = new THREE.InstancedBufferAttribute(alphas, 1);
   mesh.geometry.setAttribute('instanceAlpha', attr);
-  mesh.material.transparent = true;
-  mesh.material.depthWrite = false; // biar gak nutupin objek di belakangnya pas transparan
+  // PENTING: material TETAP opaque (bukan transparent+depthWrite:false) — ratusan
+  // instance yang numpuk (tiang/balok/kotak) kalau di-alpha-blend beneran malah
+  // numpuk jadi item/kabur (classic transparency-stacking problem). Solusinya pakai
+  // "discard" — instance yang di-dim disembunyikan TOTAL (invisible), bukan ditransparanin,
+  // jadi tetep opaque & depth-tested dengan benar, hasilnya bersih.
   mesh.material.onBeforeCompile = function(shader) {
     shader.vertexShader = 'attribute float instanceAlpha;\nvarying float vInstanceAlpha;\n' + shader.vertexShader;
     shader.vertexShader = shader.vertexShader.replace(
@@ -6854,7 +6857,7 @@ function _p3dEnableInstanceAlpha(mesh, count) {
     shader.fragmentShader = 'varying float vInstanceAlpha;\n' + shader.fragmentShader;
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <dithering_fragment>',
-      '#include <dithering_fragment>\ngl_FragColor.a *= vInstanceAlpha;'
+      '#include <dithering_fragment>\nif (vInstanceAlpha < 0.5) discard;'
     );
   };
   mesh.userData.alphaAttr = attr;
@@ -6867,7 +6870,7 @@ function _p3dSetHighlight(letter) {
     var alphaAttr = mesh.userData.alphaAttr;
     if (!alphaAttr) return;
     for (var i = 0; i < letters.length; i++) {
-      alphaAttr.array[i] = (!letter || letters[i] === letter) ? 1 : 0.08; // rak lain jadi beneran transparan
+      alphaAttr.array[i] = (!letter || letters[i] === letter) ? 1 : 0; // rak lain disembunyikan total (bukan di-blend)
     }
     alphaAttr.needsUpdate = true;
   });
