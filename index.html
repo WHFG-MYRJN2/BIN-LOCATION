@@ -6859,7 +6859,11 @@ function _p3dZoomToRack(letter) {
   var totalSpan = Math.max(_p3dSceneSpan.x, _p3dSceneSpan.z, 20);
   var toZoom = Math.min(9, Math.max(2, (totalSpan / rackSpan) * 0.55)); // rasio blok vs keseluruhan scene
   var dist = rackSpan * 1.6 + 20; // posisi kamera cuma buat sudut pandang & hindarin clipping, bukan zoom
-  var dir = { x: 0.75, y: 0.6, z: 0.75 };
+  // Blok B,D,F,H,I (MIRRORED — orientasi fisiknya kebalik) pakai sudut zoom yang diputar 180°
+  // biar tetep ngeliat sisi "depan" rak itu yang bener, bukan dari belakang.
+  var MIRRORED_ZOOM = ['B','D','F','H','I'];
+  var isMirroredZoom = MIRRORED_ZOOM.indexOf(letter) !== -1;
+  var dir = isMirroredZoom ? { x: -0.75, y: 0.6, z: -0.75 } : { x: 0.75, y: 0.6, z: 0.75 };
   var len = Math.sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
   var fromTarget = _p3dControls.target.clone();
   var fromOffset = { x: _p3dCamera.position.x - fromTarget.x, y: _p3dCamera.position.y - fromTarget.y, z: _p3dCamera.position.z - fromTarget.z };
