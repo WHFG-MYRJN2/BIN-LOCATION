@@ -6838,41 +6838,36 @@ function _p3dShortestAngleLerp(a, b, t) {
 // ── Aktifin transparansi PER-INSTANCE di InstancedMesh (Three.js gak dukung ini bawaan —
 // setColorAt cuma bisa tint warna, gak ada alpha). Ini nyuntik custom attribute + shader
 // biar tiap instance bisa punya alpha sendiri-sendiri, dipakai buat efek "rak lain transparan". ──
-function _p3dEnableInstanceAlpha(mesh, count) {
+// ── Daftarin mesh instanced ke sistem highlight, sambil rekam SEMUA matrix transform aslinya.
+// Ini gantiin pendekatan shader (discard/alpha) yang sebelumnya kena bug (kemungkinan cache
+// program shader antar-material di Three.js). Sekarang pakai fitur BAWAAN Three.js:
+// mesh.count buat batesin jumlah instance yang di-render, plus reorder instanceMatrix biar
+// instance yang mau ditampilin ada di slot 0..count-1. Dijamin benar, gak ada trik shader. ──
+function _p3dRegisterHighlightMesh(mesh, letters, binCodes) {
   var THREE = _p3dTHREE;
-  var alphas = new Float32Array(count).fill(1);
-  var attr = new THREE.InstancedBufferAttribute(alphas, 1);
-  mesh.geometry.setAttribute('instanceAlpha', attr);
-  // PENTING: material TETAP opaque (bukan transparent+depthWrite:false) — ratusan
-  // instance yang numpuk (tiang/balok/kotak) kalau di-alpha-blend beneran malah
-  // numpuk jadi item/kabur (classic transparency-stacking problem). Solusinya pakai
-  // "discard" — instance yang di-dim disembunyikan TOTAL (invisible), bukan ditransparanin,
-  // jadi tetep opaque & depth-tested dengan benar, hasilnya bersih.
-  mesh.material.onBeforeCompile = function(shader) {
-    shader.vertexShader = 'attribute float instanceAlpha;\nvarying float vInstanceAlpha;\n' + shader.vertexShader;
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <begin_vertex>',
-      '#include <begin_vertex>\nvInstanceAlpha = instanceAlpha;'
-    );
-    shader.fragmentShader = 'varying float vInstanceAlpha;\n' + shader.fragmentShader;
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <dithering_fragment>',
-      '#include <dithering_fragment>\nif (vInstanceAlpha < 0.5) discard;'
-    );
-  };
-  mesh.userData.alphaAttr = attr;
+  var n = letters.length;
+  var orig = [];
+  var m4 = new THREE.Matrix4();
+  for (var i = 0; i < n; i++) { mesh.getMatrixAt(i, m4); orig.push(m4.clone()); }
+  mesh.userData.origMatrices = orig;
+  _p3dHighlightRegistry.push({ mesh: mesh, letters: letters, binCodes: binCodes || null });
 }
 
 function _p3dSetHighlight(letter) {
   if (!_p3dTHREE) return;
   _p3dHighlightRegistry.forEach(function(entry) {
     var mesh = entry.mesh, letters = entry.letters;
-    var alphaAttr = mesh.userData.alphaAttr;
-    if (!alphaAttr) return;
+    var orig = mesh.userData.origMatrices;
+    if (!orig) return;
+    var idx = 0;
     for (var i = 0; i < letters.length; i++) {
-      alphaAttr.array[i] = (!letter || letters[i] === letter) ? 1 : 0; // rak lain disembunyikan total (bukan di-blend)
+      if (!letter || letters[i] === letter) {
+        mesh.setMatrixAt(idx, orig[i]);
+        idx++;
+      }
     }
-    alphaAttr.needsUpdate = true;
+    mesh.count = idx;
+    mesh.instanceMatrix.needsUpdate = true;
   });
 }
 
@@ -7794,8 +7789,7 @@ function _p3dBuildRotateScene() {
   });
   if (postMesh.instanceColor) postMesh.instanceColor.needsUpdate = true;
   framesGroup.add(postMesh);
-  _p3dEnableInstanceAlpha(postMesh, postInstances.length || 1);
-  _p3dHighlightRegistry.push({ mesh: postMesh, letters: postInstances.map(function(pi){ return pi.letter; }) });
+  _p3dRegisterHighlightMesh(postMesh, postInstances.map(function(pi){ return pi.letter; }));
 
   var beamInstances = [];
   LAYOUT_ORDER.forEach(function(letter) {
@@ -7837,8 +7831,7 @@ function _p3dBuildRotateScene() {
   });
   if (beamMesh.instanceColor) beamMesh.instanceColor.needsUpdate = true;
   framesGroup.add(beamMesh);
-  _p3dEnableInstanceAlpha(beamMesh, beamInstances.length || 1);
-  _p3dHighlightRegistry.push({ mesh: beamMesh, letters: beamInstances.map(function(bi){ return bi.letter; }) });
+  _p3dRegisterHighlightMesh(beamMesh, beamInstances.map(function(bi){ return bi.letter; }));
 
   var beamXInstances = [];
   LAYOUT_ORDER.forEach(function(letter) {
@@ -7881,8 +7874,7 @@ function _p3dBuildRotateScene() {
   });
   if (beamXMesh.instanceColor) beamXMesh.instanceColor.needsUpdate = true;
   framesGroup.add(beamXMesh);
-  _p3dEnableInstanceAlpha(beamXMesh, beamXInstances.length || 1);
-  _p3dHighlightRegistry.push({ mesh: beamXMesh, letters: beamXInstances.map(function(bi){ return bi.letter; }) });
+  _p3dRegisterHighlightMesh(beamXMesh, beamXInstances.map(function(bi){ return bi.letter; }));
 
   var byColor = {};
   boxData.forEach(function(b){ (byColor[b.color] = byColor[b.color]||[]).push(b); });
@@ -7901,8 +7893,7 @@ function _p3dBuildRotateScene() {
     });
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     boxesGroup.add(mesh);
-    _p3dEnableInstanceAlpha(mesh, arr.length || 1);
-    _p3dHighlightRegistry.push({ mesh: mesh, letters: arr.map(function(b){ return b.letter; }), binCodes: arr.map(function(b){ return b.binCode; }) });
+    _p3dRegisterHighlightMesh(mesh, arr.map(function(b){ return b.letter; }), arr.map(function(b){ return b.binCode; }));
   });
   if (boxData.length) {
     var palletMesh = new THREE.InstancedMesh(palletGeo, palletMat, boxData.length);
@@ -7914,8 +7905,7 @@ function _p3dBuildRotateScene() {
     });
     if (palletMesh.instanceColor) palletMesh.instanceColor.needsUpdate = true;
     boxesGroup.add(palletMesh);
-    _p3dEnableInstanceAlpha(palletMesh, boxData.length || 1);
-    _p3dHighlightRegistry.push({ mesh: palletMesh, letters: boxData.map(function(b){ return b.letter; }), binCodes: boxData.map(function(b){ return b.binCode; }) });
+    _p3dRegisterHighlightMesh(palletMesh, boxData.map(function(b){ return b.letter; }), boxData.map(function(b){ return b.binCode; }));
 
     var hx=0.43, hy=0.4, hz=0.43;
     var corners = [
