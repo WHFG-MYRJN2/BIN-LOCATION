@@ -1514,10 +1514,11 @@ input:focus, select:focus {
      SCREEN: STOCK OPNAME FIFO
 ═══════════════════════════════ -->
 <div class="screen" id="screen-opname-fifo">
-  <div class="app-header">
+  <div class="app-header" style="gap:6px;">
     <button class="back-btn" onclick="showScreen('screen-tipe')">←</button>
     <div class="title-group"><h2>Stock Opname</h2><div class="sub">Input opname FIFO</div></div>
-    <button onclick="openOpnameRiwayat()" style="background:none;border:1px solid var(--border);border-radius:10px;padding:7px 12px;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;">📜 Riwayat</button>
+    <button onclick="openPickingListModal()" style="background:none;border:1px solid #2563eb60;border-radius:10px;padding:7px 10px;color:#2563eb;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">📋 Picking List</button>
+    <button onclick="openOpnameRiwayat()" style="background:none;border:1px solid var(--border);border-radius:10px;padding:7px 10px;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">📜 Riwayat</button>
   </div>
 
   <div style="padding:0 16px 100px;">
@@ -1593,6 +1594,19 @@ input:focus, select:focus {
       <input type="text" id="of-sku-search-input" placeholder="Cari kode / nama SKU..." oninput="ofFilterSku()" style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px;box-sizing:border-box;">
     </div>
     <div id="of-sku-search-results" style="max-height:50vh;overflow-y:auto;"></div>
+  </div>
+</div>
+
+<!-- Modal pilih Tipe buat Picking List -->
+<div id="pl-tipe-overlay" onclick="if(event.target===this)plCloseTipeModal()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;align-items:center;justify-content:center;padding:20px;">
+  <div style="max-width:340px;width:100%;background:var(--surface);border-radius:16px;padding:22px;">
+    <div style="font-weight:800;font-size:16px;margin-bottom:2px;">📋 Picking List</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:18px;">Pilih tipe barang buat di-print</div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <button onclick="plGenerate('LOKAL')" style="padding:15px;border-radius:12px;border:2px solid #16a34a;background:#16a34a10;color:#16a34a;font-weight:800;font-size:14px;cursor:pointer;">🏭 LOKAL</button>
+      <button onclick="plGenerate('EKSPOR')" style="padding:15px;border-radius:12px;border:2px solid #7c3aed;background:#7c3aed10;color:#7c3aed;font-weight:800;font-size:14px;cursor:pointer;">🚢 EKSPOR</button>
+    </div>
+    <button onclick="plCloseTipeModal()" style="margin-top:14px;width:100%;padding:11px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--muted);font-weight:700;font-size:13px;cursor:pointer;">Batal</button>
   </div>
 </div>
 
@@ -2464,8 +2478,10 @@ function loadStdForSku(kode) {
   document.getElementById('f-total-karton').value = '';
 
   gasCall('getStdBySku', kode,
-    function(std) {
+    function(res) {
+      var std = (res && typeof res === 'object') ? res.std : res; // jaga kompatibilitas kalau backend versi lama
       state.std = std > 0 ? std : null;
+      if (res && res.error) showToast('⚠️ Gangguan cek STD (' + res.error + ') — coba lagi kalau STD gak muncul', 3500);
       showStdInfo();
       calcTotal();
       if (state.aksi && state.aksi !== 'MASUK') showProdateChips(kode);
@@ -2555,6 +2571,21 @@ function showProdateChips(skuKode) {
     state.selectedProdate = pd.prodate;
     state.maxPallet = pd.pallet;
     state.maxKarton = pd.karton;
+    // Kalau STD gak ketemu di master SKU, coba hitung mundur dari stok yang UDAH ada di bin
+    // ini (karton, pallet, pecahan) — daripada maksa user isi manual padahal datanya udah ada.
+    if (!state.std) {
+      var pecSumSP = (pd.pecahan_list || []).reduce(function(a,b){return a+b;}, 0);
+      if (pd.pallet > 0 && pd.karton > 0) {
+        var derivedStd = Math.round((pd.karton - pecSumSP) / pd.pallet);
+        if (derivedStd > 0) {
+          state.std = derivedStd;
+          document.getElementById('std-info-text').textContent = 'STD: ' + derivedStd + ' karton/pallet (dihitung dari stok bin ini)';
+          document.getElementById('std-info').style.display = 'block';
+          document.getElementById('std-warn').style.display = 'none';
+          calcTotal(); // refresh field Total Karton biar langsung ke-update pake STD hasil hitungan
+        }
+      }
+    }
     // Auto-fill dan lock quotation
     if (state.tipe === 'EKSPOR') {
       var qtEl = document.getElementById('f-quotation');
@@ -2581,6 +2612,7 @@ function showProdateChips(skuKode) {
     var stokLabel = p.karton > 0 ? p.karton + ' ktn' : p.pallet + ' plt';
     return '<div class="prodate-chip' + (isFirst ? ' fifo-first' : '') + '" '
       + 'data-prodate="' + p.prodate + '" data-pallet="' + p.pallet + '" data-karton="' + (p.karton||0) + '" data-qt="' + (p.quotation||'') + '" '
+      + 'data-pec=\'' + JSON.stringify(p.pecahan_list || []) + '\' '
       + 'onclick="pilihProdateChip(this)">'
       + '<span>' + p.prodate + '</span>'
       + '<span class="chip-pallet">(' + stokLabel + ')</span>'
@@ -2593,7 +2625,7 @@ function showProdateChips(skuKode) {
   var firstChip = chipsWrap.querySelector('.prodate-chip');
   if (firstChip) {
     firstChip.classList.add('selected');
-    selectProdate({ prodate: prodates[0].prodate, pallet: prodates[0].pallet, karton: prodates[0].karton || 0, quotation: prodates[0].quotation || '' });
+    selectProdate({ prodate: prodates[0].prodate, pallet: prodates[0].pallet, karton: prodates[0].karton || 0, quotation: prodates[0].quotation || '', pecahan_list: prodates[0].pecahan_list || [] });
   }
 }
 
@@ -2604,6 +2636,8 @@ function pilihProdateChip(el) {
   var pallet    = parseInt(el.getAttribute('data-pallet')) || 0;
   var karton    = parseInt(el.getAttribute('data-karton')) || 0;
   var quotation = el.getAttribute('data-qt') || '';
+  var pecList   = [];
+  try { pecList = JSON.parse(el.getAttribute('data-pec') || '[]'); } catch(e) { pecList = []; }
   document.getElementById('f-prodate').value = prodateToDanteInput(prodate);
   state.selectedProdate = prodate;
   state.maxPallet = pallet;
@@ -2611,7 +2645,21 @@ function pilihProdateChip(el) {
   if (state.tipe === 'EKSPOR' && quotation) {
     document.getElementById('f-quotation').value = quotation;
   }
-  showStokInfo(pallet, karton, pd.pecahan_list || []);
+  // Sama kayak selectProdate — kalau STD gak ketemu di master, hitung mundur dari stok bin ini
+  if (!state.std) {
+    var pecSumPC = pecList.reduce(function(a,b){return a+b;}, 0);
+    if (pallet > 0 && karton > 0) {
+      var derivedStdPC = Math.round((karton - pecSumPC) / pallet);
+      if (derivedStdPC > 0) {
+        state.std = derivedStdPC;
+        document.getElementById('std-info-text').textContent = 'STD: ' + derivedStdPC + ' karton/pallet (dihitung dari stok bin ini)';
+        document.getElementById('std-info').style.display = 'block';
+        document.getElementById('std-warn').style.display = 'none';
+        calcTotal();
+      }
+    }
+  }
+  showStokInfo(pallet, karton, pecList);
   updateSubmitState();
 }
 
@@ -5592,6 +5640,144 @@ function ofDownloadPdf() {
 }
 
 // ═══════════════════════════════════════
+// PICKING LIST — semua SKU (dari stok bin aktual), filter Tipe LOKAL/EKSPOR
+// ═══════════════════════════════════════
+function openPickingListModal() {
+  document.getElementById('pl-tipe-overlay').style.display = 'flex';
+}
+function plCloseTipeModal() {
+  document.getElementById('pl-tipe-overlay').style.display = 'none';
+}
+
+function plGenerate(tipe) {
+  plCloseTipeModal();
+  showLoading(true);
+  gasCall('getBinCurrentLite', null, function(data) {
+    showLoading(false);
+    plBuildAndDownload(tipe, data || []);
+  }, function() {
+    showLoading(false);
+    showToast('❌ Gagal memuat data stok');
+  });
+}
+
+function plBuildAndDownload(tipe, rawData) {
+  var filtered = rawData.filter(function(r) { return String(r.tipe || 'LOKAL').toUpperCase() === tipe; });
+  if (!filtered.length) { showToast('📭 Tidak ada stok tipe ' + tipe); return; }
+
+  // ── Grouping: SKU → prodate → { pallet, pecList[], bins{} } ──
+  var skuMap = {};
+  filtered.forEach(function(r) {
+    var kode = r.skuKode, nama = r.skuNama || '';
+    if (!skuMap[kode]) skuMap[kode] = { nama: nama, prodates: {} };
+    var pd = r.prodate || '-';
+    if (!skuMap[kode].prodates[pd]) skuMap[kode].prodates[pd] = { pallet: 0, pecList: [], bins: {} };
+    var e = skuMap[kode].prodates[pd];
+    e.pallet += r.pallet || 0;
+    var pecList = (r.pecahan_list && r.pecahan_list.length > 0) ? r.pecahan_list : ((r.pecahan||0) > 0 ? [r.pecahan] : []);
+    pecList.forEach(function(v){ e.pecList.push(v); });
+    if (r.binLoc) e.bins[r.binLoc] = true;
+  });
+
+  var skuCodes = Object.keys(skuMap).sort();
+  var tableRows = '';
+  var grandKarton = 0, grandPallet = 0, skuCount = skuCodes.length;
+  var no = 0;
+
+  skuCodes.forEach(function(kode) {
+    no++;
+    var sObj  = skuMap[kode];
+    var match = (skuData || []).find(function(m){ return m.kode === kode; });
+    var std   = (match && match.std) ? match.std : 0;
+    var prodateKeys = Object.keys(sObj.prodates).sort();
+
+    var rows = prodateKeys.map(function(pd) {
+      var e      = sObj.prodates[pd];
+      var pecSum = e.pecList.reduce(function(a,b){ return a+b; }, 0);
+      var totalKtn = (e.pallet * std) + pecSum;
+      var posisi   = Object.keys(e.bins).sort().join(', ');
+      var pecDisp  = e.pecList.length ? e.pecList.join('+') : '0';
+      return { pd: pd, pallet: e.pallet, pecDisp: pecDisp, totalKtn: totalKtn, posisi: posisi };
+    });
+    var skuTotalKarton = rows.reduce(function(a,r){ return a+r.totalKtn; }, 0);
+    var skuTotalPallet = rows.reduce(function(a,r){ return a+r.pallet; }, 0);
+    grandKarton += skuTotalKarton;
+    grandPallet += skuTotalPallet;
+
+    var span = rows.length;
+    rows.forEach(function(r, pi) {
+      tableRows += '<tr>';
+      if (pi === 0) {
+        tableRows += '<td rowspan="'+span+'" style="text-align:center;font-weight:bold;border-right:1px solid #e5e7eb;vertical-align:middle;">'+no+'</td>';
+        tableRows += '<td rowspan="'+span+'" style="font-family:monospace;font-size:10px;border-right:1px solid #e5e7eb;vertical-align:middle;">'+escHtml(String(kode))+'</td>';
+        tableRows += '<td rowspan="'+span+'" style="font-weight:700;border-right:1px solid #e5e7eb;vertical-align:middle;">'+escHtml(String(sObj.nama))+'</td>';
+      }
+      tableRows += '<td style="text-align:center;">'+escHtml(r.pd)+'</td>';
+      tableRows += '<td style="text-align:center;font-weight:bold;">'+r.pallet+'</td>';
+      tableRows += '<td style="text-align:center;">'+r.pecDisp+'</td>';
+      tableRows += '<td style="text-align:center;font-weight:bold;">'+r.totalKtn+'</td>';
+      tableRows += '<td style="font-size:10px;">'+escHtml(r.posisi || '-')+'</td>';
+      if (pi === 0) {
+        tableRows += '<td rowspan="'+span+'" style="text-align:center;font-weight:900;color:#2563eb;border-left:1px solid #e5e7eb;vertical-align:middle;">'+skuTotalKarton+'</td>';
+      }
+      tableRows += '</tr>';
+    });
+  });
+
+  var tc = tipe === 'EKSPOR' ? '#7c3aed' : '#16a34a';
+  var tipeLabel = tipe === 'EKSPOR' ? '🚢 EKSPOR' : '🏭 LOKAL';
+  var tglNow = new Date().toLocaleDateString('id-ID', { day:'2-digit', month:'long', year:'numeric' });
+
+  var html = '<!DOCTYPE html><html><head><meta charset="utf-8">'
+    + '<title>Picking List ' + tipe + '</title>'
+    + '<style>'
+      + 'body{font-family:Arial,sans-serif;font-size:11px;margin:24px;color:#111;}'
+      + 'h2{margin:0 0 2px;font-size:16px;font-weight:900;letter-spacing:.5px;}'
+      + '.summary-boxes{display:flex;gap:12px;margin:14px 0 18px;}'
+      + '.summary-box{border:1.5px solid #e5e7eb;border-radius:8px;padding:10px 18px;min-width:90px;text-align:center;}'
+      + '.summary-box .val{font-size:22px;font-weight:900;color:#111;line-height:1.1;}'
+      + '.summary-box .lbl{font-size:9px;color:#6b7280;font-weight:700;text-transform:uppercase;margin-top:2px;}'
+      + 'table{width:100%;border-collapse:collapse;}'
+      + 'th{background:#1a237e;color:#fff;padding:7px 8px;text-align:left;font-size:10px;font-weight:700;}'
+      + 'td{padding:5px 8px;border-bottom:1px solid #e5e7eb;vertical-align:middle;}'
+      + 'tr:nth-child(even) td{background:#f9fafb;}'
+      + '.tipe-badge{display:inline-block;background:'+tc+'15;color:'+tc+';font-weight:800;font-size:11px;padding:2px 10px;border-radius:5px;margin-left:8px;}'
+      + '@media print{button{display:none!important;}}'
+    + '</style></head><body>'
+    + '<h2>Picking List — All Item <span class="tipe-badge">' + tipeLabel + '</span></h2>'
+    + '<div style="font-size:10px;color:#6b7280;margin-bottom:4px;">Dicetak: ' + escHtml(tglNow) + '</div>'
+    + '<button onclick="window.print()" style="margin-bottom:4px;padding:6px 14px;background:#9333ea;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;margin-top:10px;">🖨️ Print / Save PDF</button>'
+    + '<div class="summary-boxes">'
+      + '<div class="summary-box"><div class="val">' + skuCount + '</div><div class="lbl">SKU</div></div>'
+      + '<div class="summary-box"><div class="val">' + grandPallet + '</div><div class="lbl">Pallet</div></div>'
+      + '<div class="summary-box"><div class="val">' + grandKarton.toLocaleString('id-ID') + '</div><div class="lbl">Total Karton</div></div>'
+    + '</div>'
+    + '<table><thead><tr>'
+      + '<th style="width:26px;text-align:center;">#</th>'
+      + '<th style="width:65px;">SKU</th>'
+      + '<th style="width:150px;">Nama Barang</th>'
+      + '<th style="width:85px;text-align:center;">Prodate</th>'
+      + '<th style="width:45px;text-align:center;">Qty Pallet</th>'
+      + '<th style="width:55px;text-align:center;">Qty Pecahan</th>'
+      + '<th style="width:65px;text-align:center;">Qty Total (krt)</th>'
+      + '<th style="width:100px;">Posisi</th>'
+      + '<th style="width:70px;text-align:center;">Total SKU (krt)</th>'
+    + '</tr></thead><tbody>' + tableRows + '</tbody></table>'
+    + '<p style="margin-top:14px;color:#9ca3af;font-size:10px;">Dicetak: ' + new Date().toLocaleString('id-ID') + '</p>'
+    + '</body></html>';
+
+  var a = document.createElement('a');
+  var blob = new Blob([html], { type: 'text/html' });
+  a.href     = URL.createObjectURL(blob);
+  a.download = 'picking-list-' + tipe.toLowerCase() + '-' + _todayISODate() + '.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
+  showToast('✅ File diunduh — buka di browser lalu Print > Save as PDF');
+}
+
+// ═══════════════════════════════════════
 // TRIAL — Password & Navigation
 // ═══════════════════════════════════════
 var _trialMode       = null; // 'transaksi' | 'opname'
@@ -5969,7 +6155,8 @@ function openTrialMasuk(skuKode, prodateVal, quotationVal) {
   }
 
   // Lookup SKU nama + STD
-  gasCall('getStdBySku', skuKode, function(std) {
+  gasCall('getStdBySku', skuKode, function(res) {
+    var std = (res && typeof res === 'object') ? res.std : res;
     _trialScannedSku.std = Number(std) || 0;
     var stdWrap = document.getElementById('tmasuk-std-manual-wrap');
     if (_trialScannedSku.std > 0) {
@@ -5980,6 +6167,7 @@ function openTrialMasuk(skuKode, prodateVal, quotationVal) {
       if (stdWrap) stdWrap.style.display = 'block';
       document.getElementById('tmasuk-std-manual').value = '';
     }
+    if (res && res.error) showToast('⚠️ Gangguan cek STD (' + res.error + ')', 3500);
     calcTrialTotal();
   }, function(){
     document.getElementById('tmasuk-std').textContent = '?';
@@ -6249,9 +6437,11 @@ function selectTrialKSku(kode, nama, tipe) {
     '<div style="font-size:11px;color:var(--muted);">⏳ Memuat prodate...</div>';
 
   // Get STD
-  gasCall('getStdBySku', kode, function(std) {
+  gasCall('getStdBySku', kode, function(res) {
+    var std = (res && typeof res === 'object') ? res.std : res;
     _trialK.std = Number(std) || 0;
     document.getElementById('tkeluar-std-val').textContent = _trialK.std || '-';
+    if (res && res.error) showToast('⚠️ Gangguan cek STD (' + res.error + ')', 3500);
   }, function(){});
 
   // Get prodate list
@@ -7482,7 +7672,7 @@ function _p3dBuildRotateScene() {
   var dockLabel = _p3dMakeLabelSprite('🚚 LOADING DOCK', {
     canvasW: 420, canvasH: 110, fontPx: 42, scale: [11, 3, 1]
   });
-  dockLabel.position.set(-floorPad - 3, 6, globalMaxZ/2);
+  dockLabel.position.set(-floorPad - 9, 6, globalMaxZ/2);
   labelsGroup.add(dockLabel);
 
   var LOKAL_COLORS = [0xff0000,0xf7ff00,0x19e619,0x3b82f6,0xf97316,0xefefef];
