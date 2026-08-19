@@ -7789,7 +7789,8 @@ function _p3dBuildRotateScene() {
   });
   if (postMesh.instanceColor) postMesh.instanceColor.needsUpdate = true;
   framesGroup.add(postMesh);
-  _p3dRegisterHighlightMesh(postMesh, postInstances.map(function(pi){ return pi.letter; }));
+  // Struktur (tiang) SENGAJA gak didaftarin ke sistem highlight — dibiarin selalu keliatan
+  // penuh buat semua blok, biar user tetap bisa liat & klik blok lain buat pindah.
 
   var beamInstances = [];
   LAYOUT_ORDER.forEach(function(letter) {
@@ -7831,7 +7832,7 @@ function _p3dBuildRotateScene() {
   });
   if (beamMesh.instanceColor) beamMesh.instanceColor.needsUpdate = true;
   framesGroup.add(beamMesh);
-  _p3dRegisterHighlightMesh(beamMesh, beamInstances.map(function(bi){ return bi.letter; }));
+  // Struktur (balok Z) juga sengaja gak didaftarin — sama alasannya kayak tiang di atas.
 
   var beamXInstances = [];
   LAYOUT_ORDER.forEach(function(letter) {
@@ -7874,7 +7875,7 @@ function _p3dBuildRotateScene() {
   });
   if (beamXMesh.instanceColor) beamXMesh.instanceColor.needsUpdate = true;
   framesGroup.add(beamXMesh);
-  _p3dRegisterHighlightMesh(beamXMesh, beamXInstances.map(function(bi){ return bi.letter; }));
+  // Struktur (balok X) juga sengaja gak didaftarin — sama alasannya kayak tiang di atas.
 
   var byColor = {};
   boxData.forEach(function(b){ (byColor[b.color] = byColor[b.color]||[]).push(b); });
