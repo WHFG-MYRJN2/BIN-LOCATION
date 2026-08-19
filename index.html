@@ -5661,6 +5661,20 @@ function plGenerate(tipe) {
   });
 }
 
+// Parse prodate format "DD-MMM-YYYY" (misal "27-Jul-2026") jadi timestamp buat sort kronologis —
+// .sort() biasa itu sort STRING alfabetis, bukan tanggal (bikin "10-Aug" nongol sebelum "27-Jul"
+// padahal Juli lebih dulu/tua — urutan FIFO jadi salah).
+function _plParseProdateForSort(pd) {
+  var months = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+  var parts = String(pd || '').split('-');
+  if (parts.length !== 3) return 0;
+  var dd = parseInt(parts[0], 10) || 1;
+  var mm = months[String(parts[1]).toLowerCase()];
+  if (mm === undefined) mm = 0;
+  var yy = parseInt(parts[2], 10) || 0;
+  return new Date(yy, mm, dd).getTime();
+}
+
 function plBuildAndDownload(tipe, rawData) {
   var filtered = rawData.filter(function(r) { return String(r.tipe || 'LOKAL').toUpperCase() === tipe; });
   if (!filtered.length) { showToast('📭 Tidak ada stok tipe ' + tipe); return; }
@@ -5689,7 +5703,9 @@ function plBuildAndDownload(tipe, rawData) {
     var sObj  = skuMap[kode];
     var match = (skuData || []).find(function(m){ return m.kode === kode; });
     var std   = (match && match.std) ? match.std : 0;
-    var prodateKeys = Object.keys(sObj.prodates).sort();
+    var prodateKeys = Object.keys(sObj.prodates).sort(function(a, b) {
+      return _plParseProdateForSort(a) - _plParseProdateForSort(b); // paling tua (FIFO) duluan
+    });
 
     var rows = prodateKeys.map(function(pd) {
       var e      = sObj.prodates[pd];
