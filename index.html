@@ -1417,7 +1417,8 @@ input:focus, select:focus {
         <!-- Mode: Racking -->
         <div id="tujuan-racking-wrap">
           <input class="field-input" id="bin-tujuan-input" placeholder="cth: A1, B12..." style="text-transform:uppercase"
-            oninput="this.value=this.value.toUpperCase(); state.binTujuan=normalizeBinLoc(this.value.trim()); this.value=state.binTujuan||this.value; updateSubmitState()">
+            oninput="onBinTujuanInputChange(this)">
+          <div id="bin-tujuan-warn" style="display:none;font-size:11px;color:var(--accent2);margin-top:4px">⚠️ Kode bin tidak ditemukan di peta racking</div>
         </div>
         <!-- Mode: Lain-lain — wajib pilih dari daftar Bin Tambahan (T1-T36), gak bisa ngetik bebas -->
         <div id="tujuan-lainlain-wrap" style="display:none">
@@ -2285,15 +2286,21 @@ function setBinMode(mode) {
 }
 
 function loadLainlainList() {
-  document.getElementById('lainlain-loading').style.display = '';
-  document.getElementById('lainlain-list').style.display    = 'none';
   document.getElementById('lainlain-add-btn').style.display = 'none';
   document.getElementById('lainlain-new-wrap').style.display = 'none';
   document.getElementById('bin-loc-custom').value = '';
 
+  // Daftar 36 bin tambahan itu STATIS (T_BIN_NAMES), yang beneran perlu ditunggu cuma
+  // angka "terisi/kapasitas" per tile — dan itu dari getBinCurrentLite yang baca SELURUH
+  // sheet BIN_CURRENT (bisa berat kalau datanya udah banyak). Daripada operator nunggu
+  // loading cuma buat MILIH NAMA bin (yang gak butuh angka itu sama sekali), list
+  // ditampilin LANGSUNG duluan (tanpa angka terisi), baru angkanya nyusul update
+  // begitu data stok selesai diambil — operator udah bisa tap bin dari detik pertama.
+  renderLainlainList([]);
+
   gasCall('getBinCurrentLite', null,
     function(data) { renderLainlainList(data || []); },
-    function()     { renderLainlainList([]); }
+    function()     { /* list statis udah kepampang, gapapa kalau angka terisi gagal ke-load */ }
   );
 }
 
@@ -2429,6 +2436,14 @@ function onBinInputChange() {
   var val = raw.trim();
   var hasLetter = /[a-zA-Z]/.test(val);
   if (val && !hasLetter) {
+    warnEl.textContent = '⚠️ Kode bin harus mengandung huruf (contoh: A1, B-03)';
+    warnEl.style.display = 'block';
+    btnEl.disabled = true;
+  } else if (val && hasLetter && _allRackingBinCodes().indexOf(normalizeBinLoc(val)) === -1) {
+    // Kode punya huruf tapi gak ketemu di peta racking — kemungkinan salah ketik.
+    // Kunci tombol Lanjut, WAJIB pilih dari saran di bawah (yang beneran ada di peta),
+    // biar gak ada transaksi nyasar ke bin "siluman" yang gak kepetakan di sistem.
+    warnEl.textContent = '⚠️ Kode bin "' + normalizeBinLoc(val) + '" tidak ditemukan di peta racking — pilih dari saran di bawah';
     warnEl.style.display = 'block';
     btnEl.disabled = true;
   } else {
@@ -2483,11 +2498,21 @@ function confirmBinInput() {
   }
   var raw = document.getElementById('bin-loc-input').value.trim();
   if (!raw) return;
+  var warnEl = document.getElementById('bin-loc-warn');
   if (!/[a-zA-Z]/.test(raw)) {
-    document.getElementById('bin-loc-warn').style.display = 'block';
+    warnEl.textContent = '⚠️ Kode bin harus mengandung huruf (contoh: A1, B-03)';
+    warnEl.style.display = 'block';
     return;
   }
   var val = normalizeBinLoc(raw);
+  // Guard terakhir sebelum lanjut — kode HARUS cocok sama peta racking. Ini jaga-jaga
+  // kalau confirmBinInput ke-trigger tanpa lewat onBinInputChange dulu (misal via
+  // Enter cepat), biar validasinya konsisten di dua jalur, bukan cuma di live-typing.
+  if (_allRackingBinCodes().indexOf(val) === -1) {
+    warnEl.textContent = '⚠️ Kode bin "' + val + '" tidak ditemukan di peta racking — pilih dari saran di bawah';
+    warnEl.style.display = 'block';
+    return;
+  }
   document.getElementById('bin-loc-input').value = val;  state.binLoc = val;
   proceedFromBin();
 }
@@ -2572,7 +2597,25 @@ function setTujuanMode(mode) {
   // Reset nilai tujuan saat ganti mode
   state.binTujuan = null;
   document.getElementById('bin-tujuan-input').value  = '';
+  document.getElementById('bin-tujuan-warn').style.display = 'none';
   if (mode === 'lainlain') renderTujuanLainlainList();
+  updateSubmitState();
+}
+
+// Sama kayak validasi bin asal (onBinInputChange) — bin tujuan PINDAH juga WAJIB
+// cocok sama peta racking, jangan sampai ada tujuan "siluman" hasil salah ketik.
+function onBinTujuanInputChange(el) {
+  el.value = el.value.toUpperCase();
+  var norm = normalizeBinLoc(el.value.trim());
+  el.value = norm || el.value;
+  var warnEl = document.getElementById('bin-tujuan-warn');
+  if (norm && _allRackingBinCodes().indexOf(norm) === -1) {
+    state.binTujuan = null; // jangan simpan kode yang gak valid ke state, walau masih kelihatan di input
+    warnEl.style.display = 'block';
+  } else {
+    state.binTujuan = norm || null;
+    warnEl.style.display = 'none';
+  }
   updateSubmitState();
 }
 
