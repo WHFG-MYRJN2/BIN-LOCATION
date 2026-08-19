@@ -2892,6 +2892,22 @@ function showStokInfo(pallet, karton, pecList) {
 }
 
 // Konversi "2025-01-07" → "07-Jan-2025" untuk dibandingkan dengan data sheet
+// Lookup index bulan (0-11) dari singkatan 3 huruf — terima BAIK singkatan Inggris
+// (Jan/Feb/.../Dec) MAUPUN Indonesia (Mei/Agu-Ags-Agt/Okt/Des). Ini WAJIB bilingual
+// karena data PRODATE/TIMESTAMP lama di sheet bisa kesimpen pakai salah satu dari
+// dua itu — tergantung locale project GAS pas baris itu ditulis (sebelum locale-fix),
+// atau kalau ada yang ngetik/edit manual langsung di spreadsheet pakai format ID.
+// Kalau cuma baca versi Inggris doang, prodate kayak "27-Okt-2027" bakal salah
+// kebaca jadi bulan lain (bahkan bisa keliru jadi Januari kalau fallback-nya 0/1).
+var _MONTH_IDX_LOOKUP = {
+  jan:0, feb:1, mar:2, apr:3, may:4, mei:4, jun:5, jul:6,
+  aug:7, agu:7, ags:7, agt:7, sep:8, oct:9, okt:9, nov:10, dec:11, des:11
+};
+function _monthAbbrToIndex(abbr) {
+  var idx = _MONTH_IDX_LOOKUP[String(abbr || '').toLowerCase()];
+  return idx === undefined ? -1 : idx;
+}
+
 function convertDateToSheetFormat(dateStr) {
   if (!dateStr) return '';
   var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -2907,15 +2923,15 @@ function convertDateToSheetFormat(dateStr) {
   return dateStr;
 }
 
-// Konversi "01-Jan-2025" → "2025-01-01" untuk input[type=date]
+// Konversi "01-Jan-2025" (atau "27-Okt-2027" versi ID) → "2025-01-01" untuk input[type=date]
 function prodateToDanteInput(pd) {
   if (!pd) return '';
-  var months = { jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
-                 jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12' };
   var parts = pd.toLowerCase().split('-');
   if (parts.length !== 3) return '';
   var d = parts[0].length === 1 ? '0' + parts[0] : parts[0];
-  var m = months[parts[1]] || '01';
+  var idx = _monthAbbrToIndex(parts[1]);
+  if (idx === -1) return ''; // bulan gak dikenali sama sekali — jangan nebak, biar kelihatan gagal daripada diam-diam salah
+  var m = String(idx + 1).padStart(2, '0');
   var y = parts[2];
   return y + '-' + m + '-' + d;
 }
@@ -3601,23 +3617,23 @@ function p3dShadeColor(hex, percent) {
 }
 
 var P3D_EKSPOR_COLOR = '#ddb96e';
-var P3D_MONTH_COLOR = {
-  'jan': '#ff0000', 'feb': '#ff0000',
-  'mar': '#f7ff00', 'apr': '#f7ff00',
-  'may': '#19e619', 'jun': '#19e619',
-  'jul': '#3b82f6', 'aug': '#3b82f6',
-  'sep': '#f97316', 'oct': '#f97316',
-  'nov': '#efefef', 'dec': '#efefef'
-};
+// Diindeks 0-11 (Jan..Dec) — dilihat lewat _monthAbbrToIndex biar bisa baca singkatan
+// Inggris MAUPUN Indonesia (dulu keyed by string 3-huruf Inggris doang, jadi prodate
+// yang kesimpen "Okt"/"Mei"/dst gak ketemu warnanya dan selalu jatuh ke fallback oranye).
+var P3D_MONTH_COLOR_BY_IDX = [
+  '#ff0000', '#ff0000', '#f7ff00', '#f7ff00',
+  '#19e619', '#19e619', '#3b82f6', '#3b82f6',
+  '#f97316', '#f97316', '#efefef', '#efefef'
+];
 
 // Warna kubus per-ITEM (bukan per-posisi lagi) — EKSPOR warna tetap, LOKAL ikut bulan prodate.
 function p3dColorForItem(item) {
   var tipe = String(item.tipe || 'LOKAL').toUpperCase();
   if (tipe === 'EKSPOR') return P3D_EKSPOR_COLOR;
   var prodate = String(item.prodate || '').trim();
-  var m = prodate.match(/[A-Za-z]{3}/); // ambil 3 huruf bulan dari format "DD-Mon-YYYY"
-  var key = m ? m[0].toLowerCase() : '';
-  return P3D_MONTH_COLOR[key] || '#f97316'; // fallback oranye kalau prodate tidak kebaca
+  var m = prodate.match(/[A-Za-z]{3,4}/); // ambil huruf bulan dari format "DD-Mon-YYYY"
+  var idx = m ? _monthAbbrToIndex(m[0]) : -1;
+  return idx === -1 ? '#f97316' : P3D_MONTH_COLOR_BY_IDX[idx]; // fallback oranye kalau prodate tidak kebaca
 }
 
 function p3dColorInfo(hexOrEmpty) {
@@ -4966,11 +4982,10 @@ var _usangFilter  = 'SEMUA'; // 'SEMUA'|'1'|'7'|'30'|'LOKAL'|'EKSPOR'
 
 function _parseLastUpdate(str) {
   if (!str) return null;
-  var mo = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
   var m = str.match(/(\d{1,2})-([A-Za-z]{3})-(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
   if (!m) return null;
-  var idx = mo[m[2].toLowerCase()];
-  if (idx === undefined) return null;
+  var idx = _monthAbbrToIndex(m[2]);
+  if (idx === -1) return null;
   return new Date(parseInt(m[3]), idx, parseInt(m[1]), parseInt(m[4]), parseInt(m[5]), parseInt(m[6]));
 }
 
@@ -5885,12 +5900,11 @@ function plGenerate(tipe) {
 // .sort() biasa itu sort STRING alfabetis, bukan tanggal (bikin "10-Aug" nongol sebelum "27-Jul"
 // padahal Juli lebih dulu/tua — urutan FIFO jadi salah).
 function _plParseProdateForSort(pd) {
-  var months = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
   var parts = String(pd || '').split('-');
   if (parts.length !== 3) return 0;
   var dd = parseInt(parts[0], 10) || 1;
-  var mm = months[String(parts[1]).toLowerCase()];
-  if (mm === undefined) mm = 0;
+  var mm = _monthAbbrToIndex(parts[1]);
+  if (mm === -1) mm = 0; // gak dikenali — tetap fallback ke Jan biar urutan gak error, tapi sekarang EN & ID dua-duanya udah dikenali jadi ini jarang kepakai
   var yy = parseInt(parts[2], 10) || 0;
   return new Date(yy, mm, dd).getTime();
 }
