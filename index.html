@@ -7788,9 +7788,11 @@ function _p3dBuildRotateScene() {
       var zBaseEff = iBackAlign ? (zBase + (rackDepth - ny)) : (zBase + _gFrontAlignOffset(letter, segs, seg));
       var binCode = letter + rowNum;
       var info = binMap[binCode];
-      if (!info || !info.items.length) continue;
+      // Kapasitas & titik tengah dicatat buat SEMUA bin (bukan cuma yang ada stok) — biar hover
+      // "cari bin terdekat" tetap kerja normal di blok manapun, walau bin-nya lagi kosong.
       _p3dBinCapRef[binCode] = ny * nz;
       _p3dBinCenterRef[binCode] = { x: finalX + 0.5, y: nz / 2, z: zBaseEff + ny / 2 };
+      if (!info || !info.items.length) continue;
       var order = [];
       for (var z=nz-1; z>=0; z--) for (var y=ny-1; y>=0; y--) order.push([y,z]);
       var slotPtr = 0;
