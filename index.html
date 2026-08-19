@@ -1678,6 +1678,22 @@ function gasCall(action, params, onSuccess, onError) {
   .catch(function(err) { if (onError) onError(err); });
 }
 
+// ── Idempotency requestId yang PERSISTEN per titik-submit ──────────────────
+// Kenapa: kalau submit gagal di sisi FRONTEND (network error/timeout) padahal
+// request-nya SEMPAT nyampe & diproses di backend, operator biasanya nge-tap
+// submit lagi. Kalau tiap tap generate requestId BARU, guard idempotency di
+// Code.gs (saveBinMovement/saveOpname, key = requestId) gak kepakai sama
+// sekali — transaksi itu KETULIS DOBEL di sheet. Fix: requestId untuk 1 titik
+// submit di-generate SEKALI lalu dipakai ulang selama belum sukses; baru
+// di-clear pas sukses ATAU pas operator mulai transaksi baru (scan ulang/reset
+// form) supaya requestId lama gak "nyangkut" ke transaksi lain yang beda.
+var _pendingReqId = {};
+function _getRequestId(key) {
+  if (!_pendingReqId[key]) _pendingReqId[key] = Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+  return _pendingReqId[key];
+}
+function _clearRequestId(key) { _pendingReqId[key] = null; }
+
 // ═══════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════
@@ -1861,10 +1877,7 @@ function _startAppAfterAuth() {
     try { showScreen('screen-tipe'); } catch(e) { goToMain(); }
   }, 300);
 
-  gasCall('getBinSkuList', null,
-    function(data) { skuData = data || []; },
-    function()     { skuData = []; }
-  );
+  _loadBinSkuList(0);
 
   gasCall('getBinCapConfig', {},
     function(capResult) {
@@ -1872,6 +1885,23 @@ function _startAppAfterAuth() {
       _capConfigReady = true;
     },
     function() { _capConfigReady = true; }
+  );
+}
+
+// Load daftar SKU (dipakai buat cari nama barang pas MASUK, dll) — retry otomatis
+// sampai 2x kalau gagal (transient network/server), baru kasih tau operator kalau
+// tetap gagal, biar gak diam-diam kelihatan kayak "daftar barang kosong".
+function _loadBinSkuList(attempt) {
+  gasCall('getBinSkuList', null,
+    function(data) { skuData = data || []; },
+    function() {
+      if (attempt < 2) {
+        setTimeout(function(){ _loadBinSkuList(attempt + 1); }, 800);
+      } else {
+        skuData = [];
+        showToast('⚠️ Gagal memuat daftar barang — cek koneksi lalu buka ulang halaman', 4500);
+      }
+    }
   );
 }
 
@@ -2002,6 +2032,7 @@ function resetState() {
   state.std = null;
   state.maxPallet = null;
   state.maxKarton = null;
+  _clearRequestId('form'); // mulai transaksi baru — jangan warisi requestId dari attempt sebelumnya
   // reset form
   document.getElementById('sku-input').value = '';
   document.getElementById('sku-results').style.display = 'none';
@@ -2294,7 +2325,7 @@ function confirmBinInput() {
   proceedFromBin();
 }
 
-function proceedFromBin() {
+function proceedFromBin(_isRetry) {
   var val = state.binLoc;
   document.getElementById('form-bin-display').textContent = val;
   document.getElementById('form-header-sub').textContent  = 'Bin: ' + val;
@@ -2309,8 +2340,14 @@ function proceedFromBin() {
       autoSelectMasuk();
     },
     function() {
+      // PENTING: jangan diam-diam anggap bin ini kosong kalau request-nya GAGAL
+      // (network/server error) — dulu ini bikin "barang tersedia" kelihatan kosong
+      // padahal cuma gagal fetch. Coba retry sekali otomatis dulu, baru kalau
+      // masih gagal, kasih tau operator secara eksplisit lewat toast.
+      if (!_isRetry) { proceedFromBin(true); return; }
       showLoading(false);
       binSkuData = [];
+      showToast('⚠️ Gagal memuat stok bin ini (koneksi/server) — data yang tampil BELUM TENTU kosong, cek ulang atau scan lagi', 4500);
       showScreen('screen-form');
       setDefaultProdate();
       autoSelectMasuk();
@@ -2487,7 +2524,10 @@ function loadStdForSku(kode) {
       if (state.aksi && state.aksi !== 'MASUK') showProdateChips(kode);
     },
     function() {
+      // Fetch gagal total (bukan "STD emang 0") — jangan diam-diam, kasih tau operator
+      // biar gak dikira barangnya emang gak punya STD.
       state.std = null;
+      showToast('⚠️ Gagal cek STD (koneksi/server) — coba lagi', 3500);
       showStdInfo();
       if (state.aksi && state.aksi !== 'MASUK') showProdateChips(kode);
     }
@@ -2872,7 +2912,7 @@ function submitForm() {
     operator:    state.operator,
     keterangan:  document.getElementById('f-keterangan').value.trim(),
     timestamp:   new Date().toISOString(),
-    requestId:   Date.now() + '-' + Math.random().toString(36).slice(2, 10) // idempotency key buat cegah dobel-input di backend
+    requestId:   _getRequestId('form') // dipakai ulang kalau ini retry setelah gagal, biar gak dobel
   };
 
   _submitInFlight = true;
@@ -2884,6 +2924,7 @@ function submitForm() {
       _submitInFlight = false;
       showLoading(false);
       if (res && res.ok) {
+        _clearRequestId('form');
         showSuccess(payload);
       } else {
         document.getElementById('submit-btn').disabled = false;
@@ -6139,6 +6180,7 @@ function openTrialMasuk(skuKode, prodateVal, quotationVal) {
   document.getElementById('tmasuk-total').textContent = '0';
 
   _trialScannedSku = { kode: skuKode, nama: '', std: 0, prodate: prodateVal || '', quotation: quotationVal || '' };
+  _clearRequestId('tmasuk'); // scan/pilih barang baru — mulai transaksi baru
 
   // Operator otomatis dari user yang login
   _autoFillTrialMOp();
@@ -6256,7 +6298,7 @@ function submitTrialMasuk() {
     skuKode: _trialScannedSku.kode, skuNama: _trialScannedSku.nama,
     pallet: plt, pecahan: pec, totalKarton: total, std: std,
     prodate: prodate, quotation: quotation, operator: operator, keterangan: keterangan || 'TRIAL',
-    requestId: Date.now() + '-' + Math.random().toString(36).slice(2, 10)
+    requestId: _getRequestId('tmasuk') // dipakai ulang kalau ini retry setelah gagal, biar gak dobel
   };
 
   _trialMasukInFlight = true;
@@ -6268,6 +6310,7 @@ function submitTrialMasuk() {
     if (_tmBtn) _tmBtn.disabled = false;
     showLoading(false);
     if (res && res.ok) {
+      _clearRequestId('tmasuk');
       showToast('✅ Masuk berhasil disimpan!');
       setTimeout(function(){ startTrialScan('transaksi'); }, 800);
     } else {
@@ -6344,6 +6387,7 @@ function _autoFillTrialKOp() {
 function loadTrialKeluar(bin) {
   _trialScannedBin = bin;
   _trialK.bin      = bin;
+  _clearRequestId('tkeluar'); // bin baru — mulai transaksi baru
   document.getElementById('tkeluar-bin-label').textContent = bin;
   document.getElementById('tkeluar-sku-list').innerHTML =
     '<div style="text-align:center;padding:30px;color:var(--muted);font-size:13px;">⏳ Memuat...</div>';
@@ -6588,6 +6632,7 @@ function resetTrialKForm() {
   document.getElementById('tkeluar-keterangan').value = '';
   _trialK.prodate = null;
   _trialK.sku     = null;
+  _clearRequestId('tkeluar'); // ganti barang/prodate — mulai transaksi baru
 }
 
 var _trialKeluarInFlight = false;
@@ -6623,7 +6668,7 @@ function submitTrialKeluar() {
     quotation:  _trialK.quotation,
     operator:   _trialK.operator,
     keterangan: keterangan || 'TRIAL',
-    requestId:  Date.now() + '-' + Math.random().toString(36).slice(2, 10)
+    requestId:  _getRequestId('tkeluar') // dipakai ulang kalau ini retry setelah gagal, biar gak dobel
   };
 
   _trialKeluarInFlight = true;
@@ -6635,6 +6680,7 @@ function submitTrialKeluar() {
     if (_tkBtn) _tkBtn.disabled = false;
     showLoading(false);
     if (res && res.ok) {
+      _clearRequestId('tkeluar');
       showToast('✅ ' + _trialK.aksi + ' berhasil disimpan!');
       setTimeout(function(){ loadTrialKeluar(_trialK.bin); }, 800);
     } else {
@@ -6843,12 +6889,13 @@ function opnameSesuai(kode, nama, idx, prodate, sysPlt, sysPec, sysKtn, sysQt, s
     pallet: sysPlt, pecahan: sysPec, totalKarton: sysKtn,
     prodate: prodate, quotation: sysQt || '', operator: keeper,
     keterangan: 'SESUAI', isSelisih: false,
-    requestId: Date.now() + '-' + Math.random().toString(36).slice(2, 10)
+    requestId: _getRequestId('op-' + rowId) // dipakai ulang kalau ini retry setelah gagal, biar gak dobel
   };
   _opnameRowInFlight[rowId] = true;
   showLoading(true);
   gasCall('saveOpname', payload, function() {
     _opnameRowInFlight[rowId] = false;
+    _clearRequestId('op-' + rowId);
     showLoading(false);
     var row = document.getElementById(rowId);
     row.style.borderColor = '#16a34a';
@@ -6897,12 +6944,13 @@ function opnameSimpanSelisih(kode, nama, idx, prodateAsli, qtAsli, sysTipe, sysP
     prodate: aktualProd, quotation: aktualQt, operator: keeper,
     keterangan: 'TIDAK SESUAI | Sistem: ' + sysPlt + 'p/' + sysPec + 'ktn → Aktual: ' + aktualPlt + 'p/' + aktualPec + 'ktn',
     isSelisih: true, prodateAsli: prodateAsli, quotationAsli: qtAsli, sysPlt: sysPlt, sysPec: sysPec,
-    requestId: Date.now() + '-' + Math.random().toString(36).slice(2, 10)
+    requestId: _getRequestId('op-' + rowId) // dipakai ulang kalau ini retry setelah gagal, biar gak dobel
   };
   _opnameRowInFlight[rowId] = true;
   showLoading(true);
   gasCall('saveOpname', payload, function() {
     _opnameRowInFlight[rowId] = false;
+    _clearRequestId('op-' + rowId);
     showLoading(false);
     var row = document.getElementById(rowId);
     row.style.borderColor = '#f59e0b';
