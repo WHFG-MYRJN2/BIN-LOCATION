@@ -575,6 +575,9 @@ input:focus, select:focus {
 </head>
 <body>
 
+<!-- OFFLINE INDICATOR -->
+<div id="offline-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:2000;background:#dc2626;color:#fff;text-align:center;padding:8px 12px;font-size:12px;font-weight:700;">📡 Tidak ada koneksi internet — transaksi TIDAK akan tersimpan sampai koneksi balik</div>
+
 <!-- LOADING -->
 <div id="loading-overlay"><div class="spinner"></div></div>
 
@@ -642,6 +645,12 @@ input:focus, select:focus {
   </div>
   <div class="tipe-title">Pilih<br><span>Tipe Barang</span></div>
   <div class="tipe-sub">Sesi ini untuk jenis barang apa?</div>
+
+  <!-- UNDO PILL: transaksi terakhir di device ini, bisa dibatalkan max 10 menit -->
+  <div id="undo-pill-home" onclick="openUndoConfirm()" style="display:none;align-items:center;gap:6px;justify-content:center;margin:0 16px 14px;padding:9px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:12px;color:#dc2626;font-size:11px;font-weight:700;cursor:pointer;text-align:center;">
+    <span id="undo-pill-label">↺ Batalkan transaksi terakhir</span>
+  </div>
+
   <div class="tipe-cards">
     <div class="tipe-card lokal" onclick="pilihTipe('LOKAL')">
       <div class="card-icon">🏭</div>
@@ -1507,6 +1516,21 @@ input:focus, select:focus {
     <button class="btn-next primary" onclick="lanjutScanBaru()">📦 Input Bin Baru</button>
     <button class="btn-next secondary" onclick="lanjutBinSama()">↩ Bin Sama, Transaksi Baru</button>
     <button class="btn-next secondary" onclick="goHome()">🏠 Kembali ke Awal</button>
+    <button class="btn-next secondary" id="undo-btn-success" onclick="openUndoConfirm()" style="display:none;border:1px solid #dc2626;color:#dc2626;background:none;">↺ Batalkan Transaksi Ini</button>
+  </div>
+</div>
+
+<!-- UNDO CONFIRM MODAL -->
+<div id="undo-confirm-overlay" style="display:none;position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:20px;">
+  <div style="background:var(--surface,#fff);border-radius:16px;padding:20px;max-width:360px;width:100%;">
+    <div style="font-weight:800;font-size:15px;margin-bottom:8px;color:#dc2626;">↺ Batalkan Transaksi?</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">Ini akan bikin transaksi kebalikan untuk mengoreksi stok:</div>
+    <div id="undo-confirm-detail" style="font-size:13px;font-weight:700;background:var(--surface2);border-radius:10px;padding:10px;margin-bottom:14px;">—</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">⚠️ Hanya untuk transaksi terakhir di HP/tablet ini, dalam 10 menit terakhir. Riwayat asli tetap tercatat di sistem (bukan dihapus).</div>
+    <div style="display:flex;gap:8px;">
+      <button onclick="closeUndoConfirm()" style="flex:1;padding:11px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--muted);font-weight:700;font-size:13px;cursor:pointer;">Batal</button>
+      <button onclick="doUndoLastTransaction()" style="flex:1;padding:11px;background:#dc2626;border:none;border-radius:10px;color:#fff;font-weight:700;font-size:13px;cursor:pointer;">Ya, Batalkan</button>
+    </div>
   </div>
 </div>
 
@@ -1695,6 +1719,145 @@ function _getRequestId(key) {
 function _clearRequestId(key) { _pendingReqId[key] = null; }
 
 // ═══════════════════════════════════════
+// OFFLINE / KONEKSI INDIKATOR
+// ═══════════════════════════════════════
+// navigator.onLine cuma ngecek status adapter jaringan (WiFi/data nyala atau
+// enggak), BUKAN ngecek beneran nyambung ke internet/server — jadi ini
+// indikator "kasar" tapi cukup buat kasih tau operator sebelum input kalau
+// device-nya jelas-jelas offline (mode pesawat, WiFi mati, dll).
+function _updateOnlineBanner() {
+  var banner = document.getElementById('offline-banner');
+  if (!banner) return;
+  banner.style.display = navigator.onLine ? 'none' : 'block';
+}
+window.addEventListener('online', _updateOnlineBanner);
+window.addEventListener('offline', _updateOnlineBanner);
+_updateOnlineBanner(); // cek status awal begitu script jalan (sebelum login pun tetap kelihatan)
+
+// ═══════════════════════════════════════
+// BATALKAN TRANSAKSI TERAKHIR (per-device)
+// ═══════════════════════════════════════
+// Disimpan di localStorage device ini saja (BUKAN di server) — jadi kalau
+// operator ganti HP/tablet, undo dari device lain gak akan kelihatan di sini.
+// Ini pilihan sadar: undo lintas-device butuh nyimpen "transaksi terakhir per
+// operator" di server dan berisiko salah batalin punya operator lain kalau
+// ada 2 device jalan bareng di gudang yang sama.
+var UNDO_TTL_MS = 10 * 60 * 1000; // tombol undo otomatis hilang setelah 10 menit
+var UNDO_STORAGE_KEY = 'binloc_last_undo';
+
+function _undoSave(payload) {
+  try {
+    var rec = { payload: payload, ts: Date.now(), label: _undoLabel(payload) };
+    localStorage.setItem(UNDO_STORAGE_KEY, JSON.stringify(rec));
+  } catch (e) { /* localStorage penuh/disabled — undo cuma fitur bantu, gak fatal */ }
+}
+
+function _undoGet() {
+  try {
+    var raw = localStorage.getItem(UNDO_STORAGE_KEY);
+    if (!raw) return null;
+    var rec = JSON.parse(raw);
+    if (!rec || !rec.ts || (Date.now() - rec.ts) > UNDO_TTL_MS) {
+      localStorage.removeItem(UNDO_STORAGE_KEY);
+      return null;
+    }
+    return rec;
+  } catch (e) { return null; }
+}
+
+function _undoClear() {
+  try { localStorage.removeItem(UNDO_STORAGE_KEY); } catch (e) {}
+}
+
+// Bangun payload kebalikan dari transaksi asli.
+// OPNAME SENGAJA tidak didukung — opname itu koreksi stok berdasar hitung
+// fisik, bukan pergerakan barang, jadi "membalikkan" otomatis malah bisa
+// nutup-nutupin selisih asli yang justru harus kelihatan.
+function _buildInversePayload(orig) {
+  if (!orig || (orig.aksi !== 'MASUK' && orig.aksi !== 'KELUAR' && orig.aksi !== 'PINDAH')) return null;
+  var inv = {
+    tipe:        orig.tipe,
+    skuKode:     orig.skuKode,
+    skuNama:     orig.skuNama,
+    pallet:      orig.pallet,
+    pecahan:     orig.pecahan,
+    totalKarton: orig.totalKarton,
+    std:         orig.std,
+    prodate:     orig.prodate,
+    quotation:   orig.quotation,
+    operator:    orig.operator,
+    keterangan:  '[BATALKAN] ' + (orig.keterangan || ''),
+    timestamp:   new Date().toISOString(),
+    requestId:   Date.now() + '-undo-' + Math.random().toString(36).slice(2, 10)
+  };
+  if (orig.aksi === 'MASUK') {
+    inv.aksi = 'KELUAR'; inv.binLoc = orig.binLoc; inv.binTujuan = '';
+  } else if (orig.aksi === 'KELUAR') {
+    inv.aksi = 'MASUK'; inv.binLoc = orig.binLoc; inv.binTujuan = '';
+  } else { // PINDAH — baliknya dari bin tujuan kembali ke bin asal
+    inv.aksi = 'PINDAH'; inv.binLoc = orig.binTujuan; inv.binTujuan = orig.binLoc;
+  }
+  return inv;
+}
+
+function _undoLabel(orig) {
+  if (!orig) return '';
+  var aksiText = orig.aksi === 'MASUK' ? 'Masuk' : orig.aksi === 'KELUAR' ? 'Keluar' : orig.aksi === 'PINDAH' ? 'Pindah' : orig.aksi;
+  var jmlText = (orig.pallet || 0) + ' plt' + (orig.pecahan ? ' + ' + orig.pecahan + ' ktn' : '');
+  var binText = orig.binLoc + (orig.binTujuan ? ' → ' + orig.binTujuan : '');
+  return aksiText + ' ' + (orig.skuNama || orig.skuKode) + ' · ' + jmlText + ' · ' + binText;
+}
+
+function _refreshUndoUI() {
+  var rec = _undoGet();
+  var pill = document.getElementById('undo-pill-home');
+  var pillLabel = document.getElementById('undo-pill-label');
+  var btnSuccess = document.getElementById('undo-btn-success');
+  if (pill && pillLabel) {
+    pillLabel.textContent = rec ? ('↺ Batalkan: ' + rec.label) : '';
+    pill.style.display = rec ? 'flex' : 'none';
+  }
+  if (btnSuccess) btnSuccess.style.display = (rec && rec.payload && _buildInversePayload(rec.payload)) ? 'block' : 'none';
+}
+
+function openUndoConfirm() {
+  var rec = _undoGet();
+  if (!rec) { showToast('⚠️ Tidak ada transaksi untuk dibatalkan (mungkin sudah lewat 10 menit)'); _refreshUndoUI(); return; }
+  var el = document.getElementById('undo-confirm-detail');
+  if (el) el.textContent = rec.label;
+  var overlay = document.getElementById('undo-confirm-overlay');
+  if (overlay) overlay.style.display = 'flex';
+}
+
+function closeUndoConfirm() {
+  var overlay = document.getElementById('undo-confirm-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+function doUndoLastTransaction() {
+  var rec = _undoGet();
+  if (!rec) { showToast('⚠️ Data batal sudah tidak berlaku'); closeUndoConfirm(); _refreshUndoUI(); return; }
+  var inv = _buildInversePayload(rec.payload);
+  if (!inv) { showToast('⚠️ Transaksi ini tidak bisa dibatalkan otomatis'); closeUndoConfirm(); return; }
+
+  closeUndoConfirm();
+  showLoading(true);
+  gasCall('saveBinMovement', inv, function(res) {
+    showLoading(false);
+    if (res && res.ok) {
+      _undoClear();
+      _refreshUndoUI();
+      showToast('✅ Transaksi berhasil dibatalkan');
+    } else {
+      showToast('❌ Gagal membatalkan: ' + (res ? res.msg : 'Error'));
+    }
+  }, function(err) {
+    showLoading(false);
+    showToast('❌ Error: ' + ((err && err.message) || 'Gagal membatalkan'));
+  });
+}
+
+// ═══════════════════════════════════════
 // STATE
 // ═══════════════════════════════════════
 var state = {
@@ -1871,6 +2034,7 @@ function _startAppAfterAuth() {
 
   var forceFallback = setTimeout(goToMain, 1500);
   try { initListeners(); } catch(e) { console.warn('initListeners:', e); }
+  try { _refreshUndoUI(); } catch(e) {}
 
   setTimeout(function() {
     clearTimeout(forceFallback);
@@ -1965,6 +2129,9 @@ function showScreen(id) {
   window.scrollTo(0, 0); // reset posisi scroll — cegah "nyangkut" di tengah dari screen sebelumnya
   if (id === 'screen-search') {
     // handled by setSearchTipe
+  }
+  if (id === 'screen-tipe' || id === 'screen-success') {
+    try { _refreshUndoUI(); } catch (e) {}
   }
   // Push state for hardware back button
   history.pushState({ screen: id }, '', '');
@@ -2593,18 +2760,25 @@ function showProdateChips(skuKode) {
 
   var skuEntry = binSkuData.filter(function(s) { return s.kode === skuKode; })[0];
 
-  if (!skuEntry || !skuEntry.prodates || !skuEntry.prodates.length) {
+  // PENTING: getSkuByBin gabungin prodate LOKAL & EKSPOR dalam satu skuEntry (per SKU,
+  // bukan per SKU+tipe) — kalau gak difilter di sini, operator KELUAR/PINDAH tipe EKSPOR
+  // bisa kepilih prodate yang stoknya sebenarnya LOKAL (atau sebaliknya), dan sebaliknya
+  // itu bikin salah catat tipe/quotation di BIN_CURRENT.
+  var prodates = (skuEntry && skuEntry.prodates)
+    ? skuEntry.prodates.filter(function(p) { return (p.tipe || 'LOKAL').toUpperCase() === (state.tipe || 'LOKAL').toUpperCase(); })
+    : [];
+
+  if (!prodates.length) {
     chipsWrap.style.display = 'none';
     // Tampilkan warning tidak ada stok
     var warnEl = document.getElementById('pallet-warn');
-    warnEl.innerHTML = '❌ Tidak ada stok barang ini di bin <b>' + state.binLoc + '</b>';
+    warnEl.innerHTML = '❌ Tidak ada stok ' + escHtml(state.tipe || '') + ' barang ini di bin <b>' + state.binLoc + '</b>';
     warnEl.style.display = 'block';
     state.maxKarton = 0;
     updateSubmitState();
     return;
   }
-
-  var prodates = skuEntry.prodates; // sudah urut FIFO dari GAS
+  // prodates sudah urut FIFO dari GAS (filter di atas gak ubah urutan)
 
   function selectProdate(pd) {
     prodateInput.value = prodateToDanteInput(pd.prodate);
@@ -2880,15 +3054,19 @@ function submitForm() {
     }
   }
 
-  // Validasi prodate untuk KELUAR/PINDAH — harus ada di stok bin
+  // Validasi prodate untuk KELUAR/PINDAH — harus ada di stok bin DENGAN TIPE YANG SAMA
+  // (binSkuData nyampur prodate LOKAL & EKSPOR per SKU, jadi HARUS difilter tipe di sini —
+  // kalau enggak, prodate yang stoknya sebenarnya tipe lain bisa lolos validasi).
   if (state.aksi !== 'MASUK' && binSkuData.length) {
     var skuEntry = binSkuData.filter(function(s) { return s.kode === state.sku.kode; })[0];
     if (skuEntry && skuEntry.prodates && skuEntry.prodates.length) {
       // Konversi prodate input (yyyy-MM-dd) ke format dd-MMM-yyyy untuk dibandingkan
       var inputConverted = convertDateToSheetFormat(prodate);
-      var validProdates  = skuEntry.prodates.map(function(p) { return p.prodate; });
+      var validProdates  = skuEntry.prodates
+        .filter(function(p) { return (p.tipe || 'LOKAL').toUpperCase() === (state.tipe || 'LOKAL').toUpperCase(); })
+        .map(function(p) { return p.prodate; });
       if (!validProdates.includes(inputConverted)) {
-        showToast('❌ Prodate ' + inputConverted + ' tidak tersedia di bin ini', 3500);
+        showToast('❌ Prodate ' + inputConverted + ' tidak tersedia sebagai stok ' + state.tipe + ' di bin ini', 3500);
         document.getElementById('f-prodate').style.borderColor = 'var(--accent2)';
         return;
       }
@@ -2949,6 +3127,7 @@ function showSuccess(payload) {
     + ' · Op. ' + payload.operator
     + (payload.keterangan ? '\n📝 ' + payload.keterangan : '');
   document.getElementById('success-detail').textContent = detail;
+  _undoSave(payload);
   showScreen('screen-success');
 }
 
@@ -2968,11 +3147,11 @@ function lanjutBinSama() {
   var savedBin = state.binLoc;
   resetState();
   state.binLoc = savedBin;
-  document.getElementById('form-bin-display').textContent = savedBin;
-  document.getElementById('form-header-sub').textContent = 'Bin: ' + savedBin;
-  setDefaultProdate();
-  showScreen('screen-form');
-  autoSelectMasuk();
+  // PENTING: fetch ULANG stok bin ini lewat proceedFromBin() — jangan pakai binSkuData
+  // yang lama, itu snapshot SEBELUM transaksi barusan disimpan (makanya kalau bin ini
+  // tadinya kosong terus baru di-MASUK-in, di sini masih kebaca "kosong").
+  // proceedFromBin() sendiri yang urus showLoading/setDefaultProdate/showScreen/autoSelectMasuk.
+  proceedFromBin();
 }
 
 // ═══════════════════════════════════════
@@ -5641,7 +5820,7 @@ function ofDownloadPdf() {
       + '.summary-box{border:1.5px solid #e5e7eb;border-radius:8px;padding:10px 18px;min-width:90px;text-align:center;}'
       + '.summary-box .val{font-size:22px;font-weight:900;color:#111;line-height:1.1;}'
       + '.summary-box .lbl{font-size:9px;color:#6b7280;font-weight:700;text-transform:uppercase;margin-top:2px;}'
-      + 'table{width:100%;border-collapse:collapse;}'
+      + 'table{width:100%;border-collapse:collapse;border:2.5px solid #1a237e;}'
       + 'th{background:#1a237e;color:#fff;padding:7px 8px;text-align:left;font-size:10px;font-weight:700;}'
       + 'td{padding:5px 8px;border-bottom:1px solid #e5e7eb;vertical-align:middle;}'
       + 'tr:nth-child(even) td{background:#f9fafb;}'
@@ -5794,7 +5973,7 @@ function plBuildAndDownload(tipe, rawData) {
       + '.summary-box{border:1.5px solid #e5e7eb;border-radius:8px;padding:10px 18px;min-width:90px;text-align:center;}'
       + '.summary-box .val{font-size:22px;font-weight:900;color:#111;line-height:1.1;}'
       + '.summary-box .lbl{font-size:9px;color:#6b7280;font-weight:700;text-transform:uppercase;margin-top:2px;}'
-      + 'table{width:100%;border-collapse:collapse;}'
+      + 'table{width:100%;border-collapse:collapse;border:2.5px solid #1a237e;}'
       + 'th{background:#1a237e;color:#fff;padding:7px 8px;text-align:left;font-size:10px;font-weight:700;}'
       + 'td{padding:5px 8px;border-bottom:1px solid #e5e7eb;vertical-align:middle;}'
       + 'tr:nth-child(even) td{background:#f9fafb;}'
@@ -6311,6 +6490,7 @@ function submitTrialMasuk() {
     showLoading(false);
     if (res && res.ok) {
       _clearRequestId('tmasuk');
+      _undoSave(payload);
       showToast('✅ Masuk berhasil disimpan!');
       setTimeout(function(){ startTrialScan('transaksi'); }, 800);
     } else {
@@ -6509,7 +6689,10 @@ function selectTrialKSku(kode, nama, tipe) {
     var found = (data || []).filter(function(s){ return s.kode === kode; });
     if (!found.length) return;
     var sku = found[0];
-    var prodates = sku.prodates || [];
+    // getSkuByBin gabungin prodate LOKAL & EKSPOR jadi satu skuEntry — filter tipe di sini
+    // biar chip yang muncul cuma yang tipe-nya SAMA sama transaksi yang lagi dikerjakan
+    // (_trialK.tipe), jangan sampai kepilih prodate yang stoknya sebenarnya tipe lain.
+    var prodates = (sku.prodates || []).filter(function(p) { return (p.tipe || 'LOKAL').toUpperCase() === (_trialK.tipe || 'LOKAL').toUpperCase(); });
 
     // Build chips dan inject ke DOM dulu, baru attach event
     var chipsWrap = document.getElementById('tkeluar-prodate-chips');
@@ -6681,6 +6864,7 @@ function submitTrialKeluar() {
     showLoading(false);
     if (res && res.ok) {
       _clearRequestId('tkeluar');
+      _undoSave(payload);
       showToast('✅ ' + _trialK.aksi + ' berhasil disimpan!');
       setTimeout(function(){ loadTrialKeluar(_trialK.bin); }, 800);
     } else {
