@@ -6813,7 +6813,6 @@ var _p3dTBinHitGroup = null; // kotak invisible per bin tambahan (T1-T36) — sa
 var _p3dSceneSpan = { x: 20, z: 15 }; // total lebar/dalam scene — dipakai hitung rasio zoom-in per blok
 var _p3dBinMapRef = {}; // referensi binMap terbaru — dipakai popup detail blok
 var _p3dBinCapRef = {}; // { binCode: capacity } — kapasitas slot per-bin (depth × level), buat hover detail
-var _p3dBinCenterRef = {}; // { binCode: {x,y,z} } — titik tengah tiap bin, buat fallback "cari bin terdekat di layar"
 var _p3dViewAnim = null; // { fromTarget, toTarget, fromSph, toSph, start, dur } — animasi smooth pindah sudut kamera
 function _p3dEaseInOut(t) { return t < 0.5 ? 2*t*t : -1 + (4-2*t)*t; }
 // ── Helper spherical (radius/theta/phi) relatif ke target — biar animasi kamera muter
@@ -6836,39 +6835,16 @@ function _p3dShortestAngleLerp(a, b, t) {
 }
 
 // ── Highlight per-blok — dim semua instance yang letter-nya beda dari yang dipilih ──
-// ── Aktifin transparansi PER-INSTANCE di InstancedMesh (Three.js gak dukung ini bawaan —
-// setColorAt cuma bisa tint warna, gak ada alpha). Ini nyuntik custom attribute + shader
-// biar tiap instance bisa punya alpha sendiri-sendiri, dipakai buat efek "rak lain transparan". ──
-// ── Daftarin mesh instanced ke sistem highlight, sambil rekam SEMUA matrix transform aslinya.
-// Ini gantiin pendekatan shader (discard/alpha) yang sebelumnya kena bug (kemungkinan cache
-// program shader antar-material di Three.js). Sekarang pakai fitur BAWAAN Three.js:
-// mesh.count buat batesin jumlah instance yang di-render, plus reorder instanceMatrix biar
-// instance yang mau ditampilin ada di slot 0..count-1. Dijamin benar, gak ada trik shader. ──
-function _p3dRegisterHighlightMesh(mesh, letters, binCodes) {
-  var THREE = _p3dTHREE;
-  var n = letters.length;
-  var orig = [];
-  var m4 = new THREE.Matrix4();
-  for (var i = 0; i < n; i++) { mesh.getMatrixAt(i, m4); orig.push(m4.clone()); }
-  mesh.userData.origMatrices = orig;
-  _p3dHighlightRegistry.push({ mesh: mesh, letters: letters, binCodes: binCodes || null });
-}
-
 function _p3dSetHighlight(letter) {
   if (!_p3dTHREE) return;
+  var white = new _p3dTHREE.Color(1,1,1);
+  var dim   = new _p3dTHREE.Color(0.1,0.1,0.11); // dikuatin biar rak lain keliatan jauh lebih pudar/transparan
   _p3dHighlightRegistry.forEach(function(entry) {
     var mesh = entry.mesh, letters = entry.letters;
-    var orig = mesh.userData.origMatrices;
-    if (!orig) return;
-    var idx = 0;
     for (var i = 0; i < letters.length; i++) {
-      if (!letter || letters[i] === letter) {
-        mesh.setMatrixAt(idx, orig[i]);
-        idx++;
-      }
+      mesh.setColorAt(i, (!letter || letters[i] === letter) ? white : dim);
     }
-    mesh.count = idx;
-    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   });
 }
 
@@ -6883,11 +6859,7 @@ function _p3dZoomToRack(letter) {
   var totalSpan = Math.max(_p3dSceneSpan.x, _p3dSceneSpan.z, 20);
   var toZoom = Math.min(9, Math.max(2, (totalSpan / rackSpan) * 0.55)); // rasio blok vs keseluruhan scene
   var dist = rackSpan * 1.6 + 20; // posisi kamera cuma buat sudut pandang & hindarin clipping, bukan zoom
-  // Blok B,D,F,H,I (MIRRORED — orientasi fisiknya kebalik) pakai sudut zoom yang diputar 180°
-  // biar tetep ngeliat sisi "depan" rak itu yang bener, bukan dari belakang.
-  var MIRRORED_ZOOM = ['B','D','F','H','I'];
-  var isMirroredZoom = MIRRORED_ZOOM.indexOf(letter) !== -1;
-  var dir = isMirroredZoom ? { x: -0.75, y: 0.6, z: -0.75 } : { x: 0.75, y: 0.6, z: 0.75 };
+  var dir = { x: 0.75, y: 0.6, z: 0.75 };
   var len = Math.sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
   var fromTarget = _p3dControls.target.clone();
   var fromOffset = { x: _p3dCamera.position.x - fromTarget.x, y: _p3dCamera.position.y - fromTarget.y, z: _p3dCamera.position.z - fromTarget.z };
@@ -7014,25 +6986,6 @@ function _p3dSetupInteraction(canvas) {
   // Cari blok/bin yang lagi ditunjuk kursor — cek label sprite ATAU rak asli (post/beam/box/pallet)
   // lewat instanceId. Kalau instance itu punya binCode (kotak isi barang), prioritaskan info per-bin
   // (kayak mode Aktual). Kalau nggak (post/beam struktur, atau bin kosong), fallback ke info per-blok.
-  // Fallback: kena hitbox blok yang lagi DIPILIH tapi gak presisi kena kotak bin manapun
-  // (kotak isi barang kecil, gampang meleset raycast-nya) — cari bin TERDEKAT di layar
-  // dalam radius toleransi, biar hover tetep kena tanpa perlu presisi piksel-perfect.
-  function findNearestBinOnScreen(clientX, clientY, letter) {
-    var rect = canvas.getBoundingClientRect();
-    var THREE = _p3dTHREE;
-    var best = null, bestDist = 45; // toleransi ~45px
-    Object.keys(_p3dBinCenterRef).forEach(function(binCode) {
-      if (binCode.charAt(0) !== letter) return;
-      var c = _p3dBinCenterRef[binCode];
-      var v = new THREE.Vector3(c.x, c.y, c.z).project(_p3dCamera);
-      var sx = (v.x * 0.5 + 0.5) * rect.width + rect.left;
-      var sy = (-v.y * 0.5 + 0.5) * rect.height + rect.top;
-      var d = Math.hypot(sx - clientX, sy - clientY);
-      if (d < bestDist) { bestDist = d; best = binCode; }
-    });
-    return best;
-  }
-
   function pickRackTarget(clientX, clientY) {
     var rect = canvas.getBoundingClientRect();
     _p3dPointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -7061,30 +7014,17 @@ function _p3dSetupInteraction(canvas) {
       if (obj.userData && obj.userData.type === 'tbinLabel') return { letter: null, binCode: obj.userData.label, isTBin: true };
     }
 
-    // 2b+3) Cek hitbox T-bin & hitbox blok bareng, bandingin JARAK ke kamera — yang lebih
-    // deket yang menang (sebelumnya T-bin SELALU menang duluan gara-gara urutan tetap,
-    // meskipun user maksudnya klik bloknya, bukan T-bin yang kebetulan nempel di depan situ).
-    var tbHit = null, hbHit = null;
+    // 2b) Cek hitbox bin tambahan (T1-T36) — bin tunggal, klik langsung tunjukin detailnya
     if (_p3dTBinHitGroup) {
       var tbHits = _p3dRaycaster.intersectObjects(_p3dTBinHitGroup.children, false);
-      if (tbHits.length) tbHit = tbHits[0];
+      if (tbHits.length) return { letter: null, binCode: tbHits[0].object.userData.label, isTBin: true };
     }
+
+    // 3) Fallback paling robust — kotak hitbox invisible yang ngebungkus seluruh blok
+    // (struktur asli/tiang/balok terlalu tipis buat di-raycast reliable dari jarak jauh)
     if (_p3dHitboxGroup) {
       var hbHits = _p3dRaycaster.intersectObjects(_p3dHitboxGroup.children, false);
-      if (hbHits.length) hbHit = hbHits[0];
-    }
-    if (tbHit && (!hbHit || tbHit.distance <= hbHit.distance)) {
-      return { letter: null, binCode: tbHit.object.userData.label, isTBin: true };
-    }
-    if (hbHit) {
-      var hbLetter = hbHit.object.userData.letter;
-      // Kalau kena hitbox blok yang LAGI DIPILIH, coba cari bin terdekat dulu (biar dapet
-      // detail per-bin, bukan cuma info blok doang) sebelum fallback ke info blok umum.
-      if (hbLetter === _p3dSelectedLetter) {
-        var nearBin = findNearestBinOnScreen(clientX, clientY, hbLetter);
-        if (nearBin) return { letter: hbLetter, binCode: nearBin };
-      }
-      return { letter: hbLetter, binCode: null };
+      if (hbHits.length) return { letter: hbHits[0].object.userData.letter, binCode: null };
     }
     return null;
   }
@@ -7114,7 +7054,7 @@ function _p3dSetupInteraction(canvas) {
   var _lastHoverCheck = 0;
   canvas.addEventListener('mousemove', function(e) {
     var now = performance.now();
-    if (now - _lastHoverCheck < 30) return; // throttle biar gak berat (raycast banyak instance)
+    if (now - _lastHoverCheck < 60) return; // throttle biar gak berat (raycast banyak instance)
     _lastHoverCheck = now;
     if (!_p3dCamera || !_p3dScene) return;
     var target = pickRackTarget(e.clientX, e.clientY);
@@ -7542,7 +7482,7 @@ function _p3dBuildRotateScene() {
   var dockLabel = _p3dMakeLabelSprite('🚚 LOADING DOCK', {
     canvasW: 420, canvasH: 110, fontPx: 42, scale: [11, 3, 1]
   });
-  dockLabel.position.set(-floorPad - 9, 6, globalMaxZ/2);
+  dockLabel.position.set(-floorPad - 3, 6, globalMaxZ/2);
   labelsGroup.add(dockLabel);
 
   var LOKAL_COLORS = [0xff0000,0xf7ff00,0x19e619,0x3b82f6,0xf97316,0xefefef];
@@ -7605,7 +7545,6 @@ function _p3dBuildRotateScene() {
   });
   _p3dBinMapRef = binMap; // simpan referensi buat popup detail blok (klik label)
   _p3dBinCapRef = {};
-  _p3dBinCenterRef = {};
 
   // ── Bin tambahan (T) — KOSONG: cuma lantai + border kuning (gak ada kotak).
   // TERISI: render pallet asli lengkap (kotak barang + alas pallet), sama kayak rak biasa. ──
@@ -7788,11 +7727,8 @@ function _p3dBuildRotateScene() {
       var zBaseEff = iBackAlign ? (zBase + (rackDepth - ny)) : (zBase + _gFrontAlignOffset(letter, segs, seg));
       var binCode = letter + rowNum;
       var info = binMap[binCode];
-      // Kapasitas & titik tengah dicatat buat SEMUA bin (bukan cuma yang ada stok) — biar hover
-      // "cari bin terdekat" tetap kerja normal di blok manapun, walau bin-nya lagi kosong.
-      _p3dBinCapRef[binCode] = ny * nz;
-      _p3dBinCenterRef[binCode] = { x: finalX + 0.5, y: nz / 2, z: zBaseEff + ny / 2 };
       if (!info || !info.items.length) continue;
+      _p3dBinCapRef[binCode] = ny * nz;
       var order = [];
       for (var z=nz-1; z>=0; z--) for (var y=ny-1; y>=0; y--) order.push([y,z]);
       var slotPtr = 0;
@@ -7826,8 +7762,7 @@ function _p3dBuildRotateScene() {
   });
   if (postMesh.instanceColor) postMesh.instanceColor.needsUpdate = true;
   framesGroup.add(postMesh);
-  // Struktur (tiang) SENGAJA gak didaftarin ke sistem highlight — dibiarin selalu keliatan
-  // penuh buat semua blok, biar user tetap bisa liat & klik blok lain buat pindah.
+  _p3dHighlightRegistry.push({ mesh: postMesh, letters: postInstances.map(function(pi){ return pi.letter; }) });
 
   var beamInstances = [];
   LAYOUT_ORDER.forEach(function(letter) {
@@ -7869,7 +7804,7 @@ function _p3dBuildRotateScene() {
   });
   if (beamMesh.instanceColor) beamMesh.instanceColor.needsUpdate = true;
   framesGroup.add(beamMesh);
-  // Struktur (balok Z) juga sengaja gak didaftarin — sama alasannya kayak tiang di atas.
+  _p3dHighlightRegistry.push({ mesh: beamMesh, letters: beamInstances.map(function(bi){ return bi.letter; }) });
 
   var beamXInstances = [];
   LAYOUT_ORDER.forEach(function(letter) {
@@ -7912,7 +7847,7 @@ function _p3dBuildRotateScene() {
   });
   if (beamXMesh.instanceColor) beamXMesh.instanceColor.needsUpdate = true;
   framesGroup.add(beamXMesh);
-  // Struktur (balok X) juga sengaja gak didaftarin — sama alasannya kayak tiang di atas.
+  _p3dHighlightRegistry.push({ mesh: beamXMesh, letters: beamXInstances.map(function(bi){ return bi.letter; }) });
 
   var byColor = {};
   boxData.forEach(function(b){ (byColor[b.color] = byColor[b.color]||[]).push(b); });
@@ -7931,7 +7866,7 @@ function _p3dBuildRotateScene() {
     });
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     boxesGroup.add(mesh);
-    _p3dRegisterHighlightMesh(mesh, arr.map(function(b){ return b.letter; }), arr.map(function(b){ return b.binCode; }));
+    _p3dHighlightRegistry.push({ mesh: mesh, letters: arr.map(function(b){ return b.letter; }), binCodes: arr.map(function(b){ return b.binCode; }) });
   });
   if (boxData.length) {
     var palletMesh = new THREE.InstancedMesh(palletGeo, palletMat, boxData.length);
@@ -7943,7 +7878,7 @@ function _p3dBuildRotateScene() {
     });
     if (palletMesh.instanceColor) palletMesh.instanceColor.needsUpdate = true;
     boxesGroup.add(palletMesh);
-    _p3dRegisterHighlightMesh(palletMesh, boxData.map(function(b){ return b.letter; }), boxData.map(function(b){ return b.binCode; }));
+    _p3dHighlightRegistry.push({ mesh: palletMesh, letters: boxData.map(function(b){ return b.letter; }), binCodes: boxData.map(function(b){ return b.binCode; }) });
 
     var hx=0.43, hy=0.4, hz=0.43;
     var corners = [
