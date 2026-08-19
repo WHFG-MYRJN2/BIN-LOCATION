@@ -6813,6 +6813,7 @@ var _p3dTBinHitGroup = null; // kotak invisible per bin tambahan (T1-T36) — sa
 var _p3dSceneSpan = { x: 20, z: 15 }; // total lebar/dalam scene — dipakai hitung rasio zoom-in per blok
 var _p3dBinMapRef = {}; // referensi binMap terbaru — dipakai popup detail blok
 var _p3dBinCapRef = {}; // { binCode: capacity } — kapasitas slot per-bin (depth × level), buat hover detail
+var _p3dBinCenterRef = {}; // { binCode: {x,y,z} } — titik tengah tiap bin, buat fallback "cari bin terdekat di layar"
 var _p3dViewAnim = null; // { fromTarget, toTarget, fromSph, toSph, start, dur } — animasi smooth pindah sudut kamera
 function _p3dEaseInOut(t) { return t < 0.5 ? 2*t*t : -1 + (4-2*t)*t; }
 // ── Helper spherical (radius/theta/phi) relatif ke target — biar animasi kamera muter
@@ -7013,6 +7014,25 @@ function _p3dSetupInteraction(canvas) {
   // Cari blok/bin yang lagi ditunjuk kursor — cek label sprite ATAU rak asli (post/beam/box/pallet)
   // lewat instanceId. Kalau instance itu punya binCode (kotak isi barang), prioritaskan info per-bin
   // (kayak mode Aktual). Kalau nggak (post/beam struktur, atau bin kosong), fallback ke info per-blok.
+  // Fallback: kena hitbox blok yang lagi DIPILIH tapi gak presisi kena kotak bin manapun
+  // (kotak isi barang kecil, gampang meleset raycast-nya) — cari bin TERDEKAT di layar
+  // dalam radius toleransi, biar hover tetep kena tanpa perlu presisi piksel-perfect.
+  function findNearestBinOnScreen(clientX, clientY, letter) {
+    var rect = canvas.getBoundingClientRect();
+    var THREE = _p3dTHREE;
+    var best = null, bestDist = 45; // toleransi ~45px
+    Object.keys(_p3dBinCenterRef).forEach(function(binCode) {
+      if (binCode.charAt(0) !== letter) return;
+      var c = _p3dBinCenterRef[binCode];
+      var v = new THREE.Vector3(c.x, c.y, c.z).project(_p3dCamera);
+      var sx = (v.x * 0.5 + 0.5) * rect.width + rect.left;
+      var sy = (-v.y * 0.5 + 0.5) * rect.height + rect.top;
+      var d = Math.hypot(sx - clientX, sy - clientY);
+      if (d < bestDist) { bestDist = d; best = binCode; }
+    });
+    return best;
+  }
+
   function pickRackTarget(clientX, clientY) {
     var rect = canvas.getBoundingClientRect();
     _p3dPointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -7041,17 +7061,30 @@ function _p3dSetupInteraction(canvas) {
       if (obj.userData && obj.userData.type === 'tbinLabel') return { letter: null, binCode: obj.userData.label, isTBin: true };
     }
 
-    // 2b) Cek hitbox bin tambahan (T1-T36) — bin tunggal, klik langsung tunjukin detailnya
+    // 2b+3) Cek hitbox T-bin & hitbox blok bareng, bandingin JARAK ke kamera — yang lebih
+    // deket yang menang (sebelumnya T-bin SELALU menang duluan gara-gara urutan tetap,
+    // meskipun user maksudnya klik bloknya, bukan T-bin yang kebetulan nempel di depan situ).
+    var tbHit = null, hbHit = null;
     if (_p3dTBinHitGroup) {
       var tbHits = _p3dRaycaster.intersectObjects(_p3dTBinHitGroup.children, false);
-      if (tbHits.length) return { letter: null, binCode: tbHits[0].object.userData.label, isTBin: true };
+      if (tbHits.length) tbHit = tbHits[0];
     }
-
-    // 3) Fallback paling robust — kotak hitbox invisible yang ngebungkus seluruh blok
-    // (struktur asli/tiang/balok terlalu tipis buat di-raycast reliable dari jarak jauh)
     if (_p3dHitboxGroup) {
       var hbHits = _p3dRaycaster.intersectObjects(_p3dHitboxGroup.children, false);
-      if (hbHits.length) return { letter: hbHits[0].object.userData.letter, binCode: null };
+      if (hbHits.length) hbHit = hbHits[0];
+    }
+    if (tbHit && (!hbHit || tbHit.distance <= hbHit.distance)) {
+      return { letter: null, binCode: tbHit.object.userData.label, isTBin: true };
+    }
+    if (hbHit) {
+      var hbLetter = hbHit.object.userData.letter;
+      // Kalau kena hitbox blok yang LAGI DIPILIH, coba cari bin terdekat dulu (biar dapet
+      // detail per-bin, bukan cuma info blok doang) sebelum fallback ke info blok umum.
+      if (hbLetter === _p3dSelectedLetter) {
+        var nearBin = findNearestBinOnScreen(clientX, clientY, hbLetter);
+        if (nearBin) return { letter: hbLetter, binCode: nearBin };
+      }
+      return { letter: hbLetter, binCode: null };
     }
     return null;
   }
@@ -7081,7 +7114,7 @@ function _p3dSetupInteraction(canvas) {
   var _lastHoverCheck = 0;
   canvas.addEventListener('mousemove', function(e) {
     var now = performance.now();
-    if (now - _lastHoverCheck < 60) return; // throttle biar gak berat (raycast banyak instance)
+    if (now - _lastHoverCheck < 30) return; // throttle biar gak berat (raycast banyak instance)
     _lastHoverCheck = now;
     if (!_p3dCamera || !_p3dScene) return;
     var target = pickRackTarget(e.clientX, e.clientY);
@@ -7572,6 +7605,7 @@ function _p3dBuildRotateScene() {
   });
   _p3dBinMapRef = binMap; // simpan referensi buat popup detail blok (klik label)
   _p3dBinCapRef = {};
+  _p3dBinCenterRef = {};
 
   // ── Bin tambahan (T) — KOSONG: cuma lantai + border kuning (gak ada kotak).
   // TERISI: render pallet asli lengkap (kotak barang + alas pallet), sama kayak rak biasa. ──
@@ -7756,6 +7790,7 @@ function _p3dBuildRotateScene() {
       var info = binMap[binCode];
       if (!info || !info.items.length) continue;
       _p3dBinCapRef[binCode] = ny * nz;
+      _p3dBinCenterRef[binCode] = { x: finalX + 0.5, y: nz / 2, z: zBaseEff + ny / 2 };
       var order = [];
       for (var z=nz-1; z>=0; z--) for (var y=ny-1; y>=0; y--) order.push([y,z]);
       var slotPtr = 0;
