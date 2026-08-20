@@ -1719,6 +1719,15 @@ function _getRequestId(key) {
 }
 function _clearRequestId(key) { _pendingReqId[key] = null; }
 
+// Backend balikin pesan ini spesifik kalau LockService.tryLock() timeout (ada
+// transaksi operator LAIN yang lagi diproses bareng — lock-nya GLOBAL, jadi
+// gampang kepentok pas rame). Ini bukan kesalahan data, cuma numpuk antrian
+// sebentar — jadi aman di-retry OTOMATIS sekali, biar operator gak perlu tap
+// ulang sendiri cuma gara-gara kepentok orang lain submit di detik yang sama.
+function _isLockBusyMsg(msg) {
+  return typeof msg === 'string' && msg.toLowerCase().indexOf('sedang sibuk') !== -1;
+}
+
 // ═══════════════════════════════════════
 // OFFLINE / KONEKSI INDIKATOR
 // ═══════════════════════════════════════
@@ -3084,7 +3093,7 @@ function _checkBinCapacity() {
 }
 
 var _submitInFlight = false; // guard biar submitForm() gak bisa kepanggil dobel (double-tap, dsb)
-function submitForm() {
+function submitForm(_isLockRetry) {
   if (_submitInFlight) return; // udah ada request jalan, abaikan tap kedua
 
   var pallet      = document.getElementById('f-pallet').value.trim();
@@ -3163,6 +3172,14 @@ function submitForm() {
       if (res && res.ok) {
         _clearRequestId('form');
         showSuccess(payload);
+      } else if (res && _isLockBusyMsg(res.msg) && !_isLockRetry) {
+        // Server lagi kepentok transaksi operator lain (lock global) — bukan
+        // masalah data, cuma antrian sesaat. requestId TETAP sama (aman, idempotent
+        // di backend) jadi retry otomatis ini gak bikin dobel walau kebetulan
+        // percobaan pertama sebenarnya sempat sukses.
+        showToast('⏳ Server lagi sibuk (ada transaksi lain diproses) — otomatis dicoba lagi...', 2000);
+        setTimeout(function() { submitForm(true); }, 1500);
+        return;
       } else {
         document.getElementById('submit-btn').disabled = false;
         showToast('❌ Gagal: ' + (res ? res.msg : 'Error'));
@@ -3422,7 +3439,11 @@ function saveCapEditor() {
   PETA_CAP_CFG = _capEditorCfg.slice();
   closeCapEditor();
   petaRefresh();
-  gasCall('saveBinCapConfig', { cfg: PETA_CAP_CFG }, function() {
+  gasCall('saveBinCapConfig', { cfg: PETA_CAP_CFG }, function(res) {
+    if (!res || !res.ok) {
+      showToast('⚠️ Kapasitas diupdate lokal, gagal simpan ke server: ' + (res ? res.msg : 'Error'), 4000);
+      return;
+    }
     showToast('✅ Kapasitas disimpan');
   }, function() {
     showToast('⚠️ Kapasitas diupdate lokal, gagal simpan ke server');
@@ -5716,6 +5737,17 @@ function ofSave() {
   gasCall('saveOpnameFifo', { rows: payload, operator: ofOperator, tanggal: ofTanggal, plant: ofPlant }, function(res) {
     document.getElementById('of-save-btn').disabled = false;
     document.getElementById('of-save-btn').textContent = '💾 Simpan Opname';
+    // PENTING: gasCall manggil callback ini buat SEMUA respons server yang valid,
+    // BUKAN cuma yang sukses. Sebelumnya kode di sini gak pernah ngecek res.ok —
+    // langsung anggap sukses dan HAPUS SELURUH DRAFT walau backend-nya sebenarnya
+    // gagal nyimpen (misal error di tengah nulis ke sheet). Itu paling parah dari
+    // semua celah serupa yang ditemukan: draft opname biasanya diisi manual banyak
+    // baris, kalau ke-hapus padahal gak kesimpen, operator harus ngitung ulang dari
+    // awal tanpa sadar datanya ilang.
+    if (!res || !res.ok) {
+      showToast('❌ Gagal menyimpan: ' + (res ? res.msg : 'Error') + ' — data draft masih tersimpan, jangan tutup app', 5000);
+      return;
+    }
     showToast('✅ ' + res.count + ' baris tersimpan');
     ofClearDraft();
     _ofInitializing = true;
@@ -5817,6 +5849,37 @@ function ofShowDetail(sessionId) {
   showScreen('screen-opname-detail');
 }
 
+// Buka HTML report LANGSUNG di tab baru + otomatis munculin dialog print, biar operator
+// bisa langsung "Save as PDF" dari situ — sebelumnya harus download file HTML dulu, baru
+// buka manual dari Downloads, baru bisa klik tombol Print di dalamnya (2 langkah ekstra).
+// Fallback ke download manual HANYA kalau popup-nya diblokir browser (jarang terjadi kalau
+// dipicu langsung dari klik tombol, tapi tetap dijaga biar gak buntu kalau kejadian).
+function _openPrintWindow(html, downloadFilename) {
+  var winPdf = null;
+  try { winPdf = window.open('', '_blank'); } catch (e) { winPdf = null; }
+  if (!winPdf) {
+    var a = document.createElement('a');
+    var blob = new Blob([html], { type: 'text/html' });
+    a.href     = URL.createObjectURL(blob);
+    a.download = downloadFilename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
+    showToast('⚠️ Popup diblokir browser — file HTML didownload, buka manual lalu klik "Print / Save PDF"', 5000);
+    return;
+  }
+  winPdf.document.open();
+  winPdf.document.write(html);
+  winPdf.document.close();
+  // Delay dikit biar tabel (kadang panjang) selesai render dulu sebelum dialog print
+  // muncul otomatis — tombol "Print / Save PDF" di dalam halaman tetap ada buat print
+  // ulang manual kalau dialog pertama ini gak sengaja ke-cancel.
+  setTimeout(function() {
+    try { winPdf.focus(); winPdf.print(); } catch (e) {}
+  }, 400);
+}
+
 function ofDownloadPdf() {
   var s = ofCurrentSession;
   if (!s) return;
@@ -5879,8 +5942,8 @@ function ofDownloadPdf() {
       + '.summary-box .val{font-size:22px;font-weight:900;color:#111;line-height:1.1;}'
       + '.summary-box .lbl{font-size:9px;color:#6b7280;font-weight:700;text-transform:uppercase;margin-top:2px;}'
       + 'table{width:100%;border-collapse:collapse;border:2.5px solid #1a237e;}'
-      + 'th{background:#1a237e;color:#fff;padding:7px 8px;text-align:left;font-size:10px;font-weight:700;}'
-      + 'td{padding:5px 8px;border-bottom:1px solid #e5e7eb;vertical-align:middle;}'
+      + 'th{background:#1a237e;color:#fff;padding:7px 8px;text-align:left;font-size:10px;font-weight:700;border:1px solid #1a237e;}'
+      + 'td{padding:5px 8px;border:1px solid #cbd5e1;vertical-align:middle;}'
       + 'tr:nth-child(even) td{background:#f9fafb;}'
       + '.plant-badge{display:inline-block;background:#1a237e15;color:#1a237e;font-weight:800;font-size:11px;padding:2px 10px;border-radius:5px;margin-left:8px;}'
       + '@media print{button{display:none!important;}}'
@@ -5906,15 +5969,7 @@ function ofDownloadPdf() {
     + '<p style="margin-top:14px;color:#9ca3af;font-size:10px;">Dicetak: ' + new Date().toLocaleString('id-ID') + '</p>'
     + '</body></html>';
 
-  var a = document.createElement('a');
-  var blob = new Blob([html], { type: 'text/html' });
-  a.href    = URL.createObjectURL(blob);
-  a.download = 'picking-list-' + plant + '-' + tgl + '.html';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
-  showToast('✅ File diunduh — buka di browser lalu Print > Save as PDF');
+  _openPrintWindow(html, 'opname-fifo-' + plant + '-' + tgl + '.html');
 }
 
 // ═══════════════════════════════════════
@@ -6031,8 +6086,8 @@ function plBuildAndDownload(tipe, rawData) {
       + '.summary-box .val{font-size:22px;font-weight:900;color:#111;line-height:1.1;}'
       + '.summary-box .lbl{font-size:9px;color:#6b7280;font-weight:700;text-transform:uppercase;margin-top:2px;}'
       + 'table{width:100%;border-collapse:collapse;border:2.5px solid #1a237e;}'
-      + 'th{background:#1a237e;color:#fff;padding:7px 8px;text-align:left;font-size:10px;font-weight:700;}'
-      + 'td{padding:5px 8px;border-bottom:1px solid #e5e7eb;vertical-align:middle;}'
+      + 'th{background:#1a237e;color:#fff;padding:7px 8px;text-align:left;font-size:10px;font-weight:700;border:1px solid #1a237e;}'
+      + 'td{padding:5px 8px;border:1px solid #cbd5e1;vertical-align:middle;}'
       + 'tr:nth-child(even) td{background:#f9fafb;}'
       + '.tipe-badge{display:inline-block;background:'+tc+'15;color:'+tc+';font-weight:800;font-size:11px;padding:2px 10px;border-radius:5px;margin-left:8px;}'
       + '@media print{button{display:none!important;}}'
@@ -6059,15 +6114,7 @@ function plBuildAndDownload(tipe, rawData) {
     + '<p style="margin-top:14px;color:#9ca3af;font-size:10px;">Dicetak: ' + new Date().toLocaleString('id-ID') + '</p>'
     + '</body></html>';
 
-  var a = document.createElement('a');
-  var blob = new Blob([html], { type: 'text/html' });
-  a.href     = URL.createObjectURL(blob);
-  a.download = 'picking-list-' + tipe.toLowerCase() + '-' + _todayISODate() + '.html';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
-  showToast('✅ File diunduh — buka di browser lalu Print > Save as PDF');
+  _openPrintWindow(html, 'picking-list-' + tipe.toLowerCase() + '-' + _todayISODate() + '.html');
 }
 
 // ═══════════════════════════════════════
@@ -6507,7 +6554,7 @@ function calcTrialTotal() {
 }
 
 var _trialMasukInFlight = false;
-function submitTrialMasuk() {
+function submitTrialMasuk(_isLockRetry) {
   if (_trialMasukInFlight) return;
   var bin      = document.getElementById('tmasuk-bin-input').value.trim().toUpperCase();
   var plt      = Number(document.getElementById('tmasuk-pallet').value)  || 0;
@@ -6550,6 +6597,10 @@ function submitTrialMasuk() {
       _undoSave(payload);
       showToast('✅ Masuk berhasil disimpan!');
       setTimeout(function(){ startTrialScan('transaksi'); }, 800);
+    } else if (res && _isLockBusyMsg(res.msg) && !_isLockRetry) {
+      showToast('⏳ Server lagi sibuk (ada transaksi lain diproses) — otomatis dicoba lagi...', 2000);
+      if (_tmBtn) _tmBtn.disabled = true; // cegah tap manual dobel selama nunggu retry otomatis
+      setTimeout(function() { submitTrialMasuk(true); }, 1500);
     } else {
       showToast('❌ Gagal: ' + (res ? res.msg : 'Error'));
     }
@@ -6876,7 +6927,7 @@ function resetTrialKForm() {
 }
 
 var _trialKeluarInFlight = false;
-function submitTrialKeluar() {
+function submitTrialKeluar(_isLockRetry) {
   if (_trialKeluarInFlight) return;
   var plt      = Number(document.getElementById('tkeluar-pallet').value)  || 0;
   var pec      = Number(document.getElementById('tkeluar-pecahan').value) || 0;
@@ -6924,6 +6975,10 @@ function submitTrialKeluar() {
       _undoSave(payload);
       showToast('✅ ' + _trialK.aksi + ' berhasil disimpan!');
       setTimeout(function(){ loadTrialKeluar(_trialK.bin); }, 800);
+    } else if (res && _isLockBusyMsg(res.msg) && !_isLockRetry) {
+      showToast('⏳ Server lagi sibuk (ada transaksi lain diproses) — otomatis dicoba lagi...', 2000);
+      if (_tkBtn) _tkBtn.disabled = true; // cegah tap manual dobel selama nunggu retry otomatis
+      setTimeout(function() { submitTrialKeluar(true); }, 1500);
     } else {
       showToast('❌ Gagal: ' + (res ? res.msg : 'Error'));
     }
@@ -7118,7 +7173,7 @@ function opnameTidakSesuai(rowId, prodate, quotation, isEksp) {
 }
 
 var _opnameRowInFlight = {}; // guard per-baris biar tombol SESUAI/PERBAIKI gak bisa di-tap dobel
-function opnameSesuai(kode, nama, idx, prodate, sysPlt, sysPec, sysKtn, sysQt, sysTipe) {
+function opnameSesuai(kode, nama, idx, prodate, sysPlt, sysPec, sysKtn, sysQt, sysTipe, _isLockRetry) {
   var rowId = 'oprow-' + kode + '-' + idx;
   if (_opnameRowInFlight[rowId]) return;
   var keeper = _getKeeper();
@@ -7134,21 +7189,33 @@ function opnameSesuai(kode, nama, idx, prodate, sysPlt, sysPec, sysKtn, sysQt, s
   };
   _opnameRowInFlight[rowId] = true;
   showLoading(true);
-  gasCall('saveOpname', payload, function() {
+  gasCall('saveOpname', payload, function(res) {
     _opnameRowInFlight[rowId] = false;
-    _clearRequestId('op-' + rowId);
     showLoading(false);
-    var row = document.getElementById(rowId);
-    row.style.borderColor = '#16a34a';
-    row.style.background  = '#16a34a08';
-    document.getElementById(rowId + '-btns').innerHTML =
-      '<div style="padding:8px 12px;background:#16a34a20;border-radius:6px;font-size:12px;font-weight:700;color:#16a34a;text-align:center;">✅ SESUAI — ' + sysPlt + 'p + ' + sysPec + 'ktn</div>';
-    showToast('✅ Opname sesuai disimpan');
-    markOpnameDone(bin);
-  }, function() { _opnameRowInFlight[rowId] = false; showLoading(false); showToast('❌ Gagal simpan'); });
+    // PENTING: gasCall manggil callback ini buat SEMUA respons server yang valid,
+    // BUKAN cuma yang sukses (res.ok bisa false — misal lock lagi sibuk, atau
+    // validasi gagal di backend). Sebelumnya callback ini gak pernah ngecek res.ok
+    // sama sekali, jadi row langsung ditandai ✅ hijau "tersimpan" walau sebenarnya
+    // GAK ketulis ke sheet — operator ngira opname itu udah aman padahal enggak.
+    if (res && res.ok) {
+      _clearRequestId('op-' + rowId);
+      var row = document.getElementById(rowId);
+      row.style.borderColor = '#16a34a';
+      row.style.background  = '#16a34a08';
+      document.getElementById(rowId + '-btns').innerHTML =
+        '<div style="padding:8px 12px;background:#16a34a20;border-radius:6px;font-size:12px;font-weight:700;color:#16a34a;text-align:center;">✅ SESUAI — ' + sysPlt + 'p + ' + sysPec + 'ktn</div>';
+      showToast('✅ Opname sesuai disimpan');
+      markOpnameDone(bin);
+    } else if (res && _isLockBusyMsg(res.msg) && !_isLockRetry) {
+      showToast('⏳ Server lagi sibuk (ada transaksi lain diproses) — otomatis dicoba lagi...', 2000);
+      setTimeout(function() { opnameSesuai(kode, nama, idx, prodate, sysPlt, sysPec, sysKtn, sysQt, sysTipe, true); }, 1500);
+    } else {
+      showToast('❌ Gagal simpan: ' + (res ? res.msg : 'Error') + ' — baris ini BELUM tersimpan, coba lagi', 4500);
+    }
+  }, function() { _opnameRowInFlight[rowId] = false; showLoading(false); showToast('❌ Gagal simpan (koneksi/server) — baris ini BELUM tersimpan, coba lagi', 4500); });
 }
 
-function opnameSimpanSelisih(kode, nama, idx, prodateAsli, qtAsli, sysTipe, sysPlt, sysPec, sysKtn) {
+function opnameSimpanSelisih(kode, nama, idx, prodateAsli, qtAsli, sysTipe, sysPlt, sysPec, sysKtn, _isLockRetry) {
   var rowId      = 'oprow-' + kode + '-' + idx;
   if (_opnameRowInFlight[rowId]) return;
   var keeper = _getKeeper();
@@ -7189,18 +7256,28 @@ function opnameSimpanSelisih(kode, nama, idx, prodateAsli, qtAsli, sysTipe, sysP
   };
   _opnameRowInFlight[rowId] = true;
   showLoading(true);
-  gasCall('saveOpname', payload, function() {
+  gasCall('saveOpname', payload, function(res) {
     _opnameRowInFlight[rowId] = false;
-    _clearRequestId('op-' + rowId);
     showLoading(false);
-    var row = document.getElementById(rowId);
-    row.style.borderColor = '#f59e0b';
-    row.style.background  = '#f59e0b08';
-    document.getElementById(rowId + '-form').innerHTML =
-      '<div style="padding:8px 12px;background:#f59e0b20;border-radius:6px;font-size:12px;font-weight:700;color:#f59e0b;text-align:center;">⚠️ DIPERBAIKI — Aktual: ' + aktualPlt + 'p + ' + aktualPec + 'ktn</div>';
-    showToast('⚠️ Perbaikan disimpan');
-    markOpnameDone(bin);
-  }, function() { _opnameRowInFlight[rowId] = false; showLoading(false); showToast('❌ Gagal simpan'); });
+    // Sama kayak opnameSesuai — gasCall manggil callback ini walau res.ok === false,
+    // jadi WAJIB dicek eksplisit. Sebelumnya baris ini langsung ditandai "diperbaiki"
+    // walau saldo aktual belum tentu beneran ketulis ke sheet.
+    if (res && res.ok) {
+      _clearRequestId('op-' + rowId);
+      var row = document.getElementById(rowId);
+      row.style.borderColor = '#f59e0b';
+      row.style.background  = '#f59e0b08';
+      document.getElementById(rowId + '-form').innerHTML =
+        '<div style="padding:8px 12px;background:#f59e0b20;border-radius:6px;font-size:12px;font-weight:700;color:#f59e0b;text-align:center;">⚠️ DIPERBAIKI — Aktual: ' + aktualPlt + 'p + ' + aktualPec + 'ktn</div>';
+      showToast('⚠️ Perbaikan disimpan');
+      markOpnameDone(bin);
+    } else if (res && _isLockBusyMsg(res.msg) && !_isLockRetry) {
+      showToast('⏳ Server lagi sibuk (ada transaksi lain diproses) — otomatis dicoba lagi...', 2000);
+      setTimeout(function() { opnameSimpanSelisih(kode, nama, idx, prodateAsli, qtAsli, sysTipe, sysPlt, sysPec, sysKtn, true); }, 1500);
+    } else {
+      showToast('❌ Gagal simpan: ' + (res ? res.msg : 'Error') + ' — baris ini BELUM tersimpan, coba lagi', 4500);
+    }
+  }, function() { _opnameRowInFlight[rowId] = false; showLoading(false); showToast('❌ Gagal simpan (koneksi/server) — baris ini BELUM tersimpan, coba lagi', 4500); });
 }
 
 
