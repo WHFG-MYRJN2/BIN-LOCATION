@@ -2778,12 +2778,24 @@ function onStdManual(val) {
 }
 
 function validatePallet() {
+  var pallet      = parseInt(document.getElementById('f-pallet').value) || 0;
   var totalKarton = parseInt(document.getElementById('f-total-karton').value) || 0;
   var warnEl   = document.getElementById('pallet-warn');
   var palletEl = document.getElementById('f-pallet');
   var maxKtn   = state.maxKarton;
-  if (state.aksi && state.aksi !== 'MASUK' && maxKtn !== null && maxKtn !== undefined && maxKtn > 0 && totalKarton > maxKtn) {
-    var maxPlt = state.maxPallet || 0;
+  var maxPlt   = state.maxPallet || 0;
+  // Dulu yang dicek CUMA total karton — karena Total Karton dihitung dari
+  // pallet × STD, kalau STD-nya kebetulan salah/di-input manual lebih kecil dari
+  // aslinya, jumlah PALLET yang diketik bisa lebih banyak dari yang beneran ada
+  // fisiknya tapi tetep lolos cek karton. Tambahin cek pallet langsung terhadap
+  // stok pallet yang beneran ada (state.maxPallet), independen dari STD.
+  var pltExceeds = state.aksi && state.aksi !== 'MASUK' && pallet > maxPlt;
+  var ktnExceeds = state.aksi && state.aksi !== 'MASUK' && maxKtn !== null && maxKtn !== undefined && maxKtn > 0 && totalKarton > maxKtn;
+  if (pltExceeds) {
+    warnEl.innerHTML = '❌ Jumlah pallet (' + pallet + ') melebihi stok tersedia (' + maxPlt + ' plt)';
+    warnEl.style.display = 'block';
+    palletEl.style.borderColor = 'var(--accent2)';
+  } else if (ktnExceeds) {
     warnEl.innerHTML = '❌ Total karton (' + totalKarton + ') melebihi stok tersedia (' + maxPlt + ' plt / ' + maxKtn + ' ktn)';
     warnEl.style.display = 'block';
     palletEl.style.borderColor = 'var(--accent2)';
@@ -3043,6 +3055,23 @@ function pecEff(pd) {
 function escHtml(s) {
   return s.replace(/'/g, "\\'");
 }
+// escHtml() di atas CUMA escape petik satu — dipakai buat nyisipin teks ke dalam
+// string JS di attribute kayak onclick='...(' + escHtml(x) + ')'. Dia BUKAN
+// sanitizer HTML asli: gak escape < > & ", jadi kalau ada teks user (keterangan,
+// nama operator, dll) disisipin LANGSUNG ke innerHTML pakai escHtml() (atau tanpa
+// di-escape sama sekali), orang bisa nulis "<img src=x onerror=...>" atau
+// "<script>" beneran DIEKSEKUSI browser operator lain yang buka Riwayat Transaksi/
+// popup riwayat bin — bisa dipakai buat baca token login yang kesimpen di
+// localStorage. Ini escaping HTML yang BENERAN (entity-encode), khusus buat teks
+// yang disisipkan ke innerHTML — dipakai di renderRiwayat/renderTimeline.
+function escHtmlContent(s) {
+  return String(s === undefined || s === null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 // ═══════════════════════════════════════
 // OPERATOR — otomatis dari user yang login (lihat resetState), tidak ada
@@ -3063,6 +3092,11 @@ function updateSubmitState() {
     else if (state.maxKarton > 0) {
       var totalKarton = parseInt(document.getElementById('f-total-karton').value) || 0;
       if (totalKarton > state.maxKarton) ok = false;
+      // Cek pallet langsung, independen dari total karton (lihat catatan di
+      // validatePallet()) — cegah keluar/pindah pallet lebih banyak dari yang
+      // beneran ada walau STD-nya bikin karton keitung lolos.
+      var pltNow = parseInt(document.getElementById('f-pallet').value) || 0;
+      if (pltNow > (state.maxPallet || 0)) ok = false;
     }
   }
 
@@ -3087,7 +3121,13 @@ function _checkBinCapacity() {
   var curUsed    = binSkuData.reduce(function(s, r) { return s + pecEff(r); }, 0);
   var newPlt     = parseInt(document.getElementById('f-pallet').value) || 0;
   var newPec     = parseInt(document.getElementById('f-pecahan').value) || 0;
-  var newEff     = newPlt + (newPec > 0 ? 1 : 0);
+  // Dulu pecahan berapapun besarnya cuma dihitung "+1 pallet" (newPec > 0 ? 1 : 0) —
+  // jadi kalau STD-nya diketahui (misal 40 ktn/pallet), operator bisa ngetik pecahan
+  // 500 ktn dan cuma keitung setara 1 pallet doang di cek kapasitas, padahal fisiknya
+  // itu lebih dari 12 pallet — bin bisa ditumpuk jauh melebihi 110% tanpa ke-block.
+  // Kalau STD diketahui, hitung setara pallet yang beneran (dibulatkan ke atas);
+  // fallback ke pola lama (+1) cuma kalau STD-nya beneran belum diisi.
+  var newEff     = newPlt + (state.std > 0 ? Math.ceil(newPec / state.std) : (newPec > 0 ? 1 : 0));
   var afterUsed  = curUsed + newEff;
   return { cap: cap, curUsed: curUsed, afterUsed: afterUsed };
 }
@@ -3108,6 +3148,14 @@ function submitForm(_isLockRetry) {
   if (!prodate) { showToast('⚠️ Isi tanggal prodate'); return; }
   if (state.tipe === 'EKSPOR' && !quotation) { showToast('⚠️ Isi nomor quotation'); return; }
   if (state.aksi === 'PINDAH' && state.binTujuan === state.binLoc) { showToast('⚠️ Bin tujuan sama dengan bin asal'); return; }
+
+  // Cek pallet vs stok yang beneran ada — sama seperti validatePallet(), diulang
+  // di sini sebagai jaring pengaman terakhir sebelum kirim ke server (defense in
+  // depth, konsisten sama pola validasi lain di fungsi ini).
+  if (state.aksi !== 'MASUK' && Number(pallet) > (state.maxPallet || 0)) {
+    showToast('❌ Jumlah pallet (' + pallet + ') melebihi stok tersedia (' + (state.maxPallet || 0) + ' plt)');
+    return;
+  }
 
   // Blok MASUK jika bin sudah >= 110% kapasitas
   if (state.aksi === 'MASUK') {
@@ -5011,28 +5059,32 @@ function renderRiwayat(data) {
     var ktnStr = std > 0
       ? plt+'p@'+std+(pec>0?' + '+pec:'')+' ('+ktn+')'
       : (ktn > 0 ? ktn+' ktn' : plt+' plt');
-    var binTujuan = r.binTujuan ? ' → <span style="color:var(--accent3)">' + r.binTujuan + '</span>' : '';
-    var qt = r.quotation && r.quotation !== '0' ? '<span style="background:#7c3aed20;color:#7c3aed;border:1px solid #7c3aed40;border-radius:4px;padding:1px 6px;font-size:10px;">'+r.quotation+'</span>' : '';
+    // Semua field yang isinya bisa berasal dari ketikan user (keterangan, nama
+    // operator, nama/kode SKU, bin, prodate, quotation) di-escape sebelum
+    // disisipkan ke innerHTML — cegah stored-XSS lewat Riwayat Transaksi (lihat
+    // catatan di escHtmlContent()).
+    var binTujuan = r.binTujuan ? ' → <span style="color:var(--accent3)">' + escHtmlContent(r.binTujuan) + '</span>' : '';
+    var qt = r.quotation && r.quotation !== '0' ? '<span style="background:#7c3aed20;color:#7c3aed;border:1px solid #7c3aed40;border-radius:4px;padding:1px 6px;font-size:10px;">'+escHtmlContent(r.quotation)+'</span>' : '';
 
     return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;">'
       + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
-      + '<span style="font-size:10px;color:var(--muted);">' + r.timestamp + '</span>'
-      + '<span style="background:'+ac+'20;color:'+ac+';border:1px solid '+ac+'40;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;">' + r.aksi + '</span>'
+      + '<span style="font-size:10px;color:var(--muted);">' + escHtmlContent(r.timestamp) + '</span>'
+      + '<span style="background:'+ac+'20;color:'+ac+';border:1px solid '+ac+'40;border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;">' + escHtmlContent(r.aksi) + '</span>'
       + '</div>'
       + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
-      + '<span style="font-size:14px;font-weight:700;color:var(--accent);">' + r.binLoc + '</span>'
+      + '<span style="font-size:14px;font-weight:700;color:var(--accent);">' + escHtmlContent(r.binLoc) + '</span>'
       + binTujuan
-      + '<span style="font-size:10px;color:var(--muted);margin-left:auto;">' + (r.tipe||'') + '</span>'
+      + '<span style="font-size:10px;color:var(--muted);margin-left:auto;">' + escHtmlContent(r.tipe||'') + '</span>'
       + '</div>'
-      + '<div style="font-size:11px;color:#3b82f6;margin-bottom:2px;">' + r.skuKode + '</div>'
-      + '<div style="font-size:12px;color:var(--text);margin-bottom:6px;">' + r.skuNama + '</div>'
+      + '<div style="font-size:11px;color:#3b82f6;margin-bottom:2px;">' + escHtmlContent(r.skuKode) + '</div>'
+      + '<div style="font-size:12px;color:var(--text);margin-bottom:6px;">' + escHtmlContent(r.skuNama) + '</div>'
       + '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">'
-      + '<span style="background:#2563eb20;color:#2563eb;border:1px solid #2563eb40;border-radius:4px;padding:1px 6px;font-size:10px;">' + ktnStr + '</span>'
-      + (r.prodate ? '<span style="background:var(--surface2);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-size:10px;">' + r.prodate + '</span>' : '')
+      + '<span style="background:#2563eb20;color:#2563eb;border:1px solid #2563eb40;border-radius:4px;padding:1px 6px;font-size:10px;">' + escHtmlContent(ktnStr) + '</span>'
+      + (r.prodate ? '<span style="background:var(--surface2);color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-size:10px;">' + escHtmlContent(r.prodate) + '</span>' : '')
       + qt
-      + (r.operator ? '<span style="font-size:10px;color:var(--muted);margin-left:auto;">👤 '+r.operator+'</span>' : '')
+      + (r.operator ? '<span style="font-size:10px;color:var(--muted);margin-left:auto;">👤 '+escHtmlContent(r.operator)+'</span>' : '')
       + '</div>'
-      + (r.keterangan ? '<div style="font-size:10px;color:var(--muted);margin-top:4px;font-style:italic;">'+r.keterangan+'</div>' : '')
+      + (r.keterangan ? '<div style="font-size:10px;color:var(--muted);margin-top:4px;font-style:italic;">'+escHtmlContent(r.keterangan)+'</div>' : '')
       + '</div>';
   }).join('');
 }
@@ -5447,8 +5499,8 @@ function renderTimeline(d) {
         + (arahStr ? '<div style="margin-top:2px;">' + arahStr + '</div>' : '')
         + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">'
           + '<span style="font-size:10px;color:var(--muted);background:var(--surface2);padding:1px 7px;border-radius:4px;">' + qty + '</span>'
-          + (r.operator ? '<span style="font-size:10px;color:var(--muted);">👤 ' + escHtml(r.operator) + '</span>' : '')
-          + (r.keterangan ? '<span style="font-size:10px;color:var(--muted);font-style:italic;">' + escHtml(r.keterangan) + '</span>' : '')
+          + (r.operator ? '<span style="font-size:10px;color:var(--muted);">👤 ' + escHtmlContent(r.operator) + '</span>' : '')
+          + (r.keterangan ? '<span style="font-size:10px;color:var(--muted);font-style:italic;">' + escHtmlContent(r.keterangan) + '</span>' : '')
         + '</div>'
       + '</div>'
     + '</div>';
@@ -6745,7 +6797,18 @@ function toggleTrialKSkuDropdown() {
 }
 
 
+// Generasi pemilihan SKU di layar Trial Keluar/Pindah — dulu selectTrialKSku()
+// nembak 2 gasCall async (getStdBySku, getSkuByBin) yang nulis LANGSUNG ke object
+// _trialK yang sama tanpa pengecekan apapun. Kalau operator ketuk SKU lain (atau
+// scan bin lain) SEBELUM kedua request itu balik, hasil yang basi bisa nimpa
+// _trialK.std/prodate/maxPallet/quotation milik SKU LAMA padahal _trialK.sku udah
+// keganti ke SKU BARU — hasilnya transaksi kesubmit dengan kombinasi SKU+prodate+
+// STD yang gak nyambung (data salah kesimpen). Naikkan counter tiap kali SKU baru
+// dipilih, dan tiap callback async cek dulu apa dia masih "generasi" yang sama
+// sebelum nulis ke _trialK — kalau enggak, hasilnya basi dan dibuang.
+var _trialKSelGen = 0;
 function selectTrialKSku(kode, nama, tipe) {
+  var mySelGen = ++_trialKSelGen;
   _trialK.sku     = kode;
   _trialK.skuNama = nama;
   _trialK.tipe    = tipe || 'LOKAL';
@@ -6786,6 +6849,7 @@ function selectTrialKSku(kode, nama, tipe) {
 
   // Get STD
   gasCall('getStdBySku', kode, function(res) {
+    if (mySelGen !== _trialKSelGen) return; // SKU udah diganti lagi — hasil basi, buang
     var std = (res && typeof res === 'object') ? res.std : res;
     _trialK.std = Number(std) || 0;
     document.getElementById('tkeluar-std-val').textContent = _trialK.std || '-';
@@ -6794,6 +6858,7 @@ function selectTrialKSku(kode, nama, tipe) {
 
   // Get prodate list
   gasCall('getSkuByBin', _trialK.bin, function(data) {
+    if (mySelGen !== _trialKSelGen) return; // SKU udah diganti lagi — hasil basi, buang
     var found = (data || []).filter(function(s){ return s.kode === kode; });
     if (!found.length) return;
     var sku = found[0];
@@ -6830,6 +6895,11 @@ function selectTrialKSku(kode, nama, tipe) {
           + (isEksp ? '<div style="font-size:9px;color:#7c3aed;font-weight:700;margin-top:1px;">QT: ' + qt + '</div>' : '');
 
         chip.addEventListener('click', function() {
+          // Chip ini dibuat buat SKU generasi "mySelGen" — kalau operator udah
+          // pindah pilih SKU lain (chipsWrap harusnya udah diganti, tapi jaga-jaga
+          // kalau klik sempat kepencet pas transisi), jangan tulis ke _trialK SKU
+          // yang salah.
+          if (mySelGen !== _trialKSelGen) return;
           var _pl = [];
           try { _pl = JSON.parse(this.dataset.pecList || '[]'); } catch(e){}
           selectTrialKProdate(
@@ -7241,6 +7311,16 @@ function opnameSimpanSelisih(kode, nama, idx, prodateAsli, qtAsli, sysTipe, sysP
   var aktualQt   = (qtEl ? qtEl.value.trim() : '') || qtAsli || '';
   var bin        = _trialScannedBin;
   var std        = (sysPlt > 0) ? Math.round((sysKtn - sysPec) / sysPlt) : 0;
+  // Kalau sistem sama sekali gak punya catatan pallet (sysPlt=0), STD gak bisa
+  // dihitung dari histori bin ini. Kalau tetap dipaksa lanjut, aktualKtn di bawah
+  // bakal keitung SALAH: aktualPlt * 0 = 0, jadi karton dari pallet yang BARU
+  // DITEMUKAN pas opname hilang diam-diam dari total tersimpan (understate stock).
+  // Tolak & minta operator catat pallet itu lewat transaksi MASUK biasa dulu (yang
+  // mewajibkan isi STD manual), baru opname ulang — daripada nyimpen data yang salah.
+  if (sysPlt === 0 && aktualPlt > 0) {
+    showToast('❌ Sistem belum ada catatan pallet (STD tidak diketahui) untuk SKU/prodate ini — catat pallet yang ditemukan lewat transaksi MASUK biasa dulu, baru opname ulang', 5000);
+    return;
+  }
   // Kalau pallet & pecahan keduanya pakai sistem → karton juga sistem
   var aktualKtn  = (pltInput === '' && pecInputEmpty)
     ? sysKtn
