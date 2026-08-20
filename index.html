@@ -2088,6 +2088,14 @@ function _startAppAfterAuth() {
     },
     function() { _capConfigReady = true; }
   );
+
+  gasCall('getBinCapTambahan', {},
+    function(res) {
+      if (res && res.ok) _applyBinCapTambahan(res.cfg);
+      _capTambahanReady = true;
+    },
+    function() { _capTambahanReady = true; } // gagal fetch → tetap pakai default di T_BIN_NAMES
+  );
 }
 
 // Load daftar SKU (dipakai buat cari nama barang pas MASUK, dll) — retry otomatis
@@ -2380,6 +2388,23 @@ var T_BIN_NAMES = {
   'T35':{name:'KERANGKENG BLOK I 4', cap:4},
   'T36':{name:'KERANGKENG BLOK I 5', cap:4}
 };
+// Nilai di atas cuma DEFAULT/fallback (dipakai kalau server belum sempat kejawab,
+// atau lagi offline) — begitu getBinCapTambahan() dari sheet BIN_CAP_TAMBAHAN
+// kejawab, isinya ditimpa (lihat _applyBinCapTambahan) biar edit dari app/sheet
+// ke depannya beneran kepakai, gak lagi keiket ke angka yang ditulis di kode ini.
+var _capTambahanReady = false;
+
+function _applyBinCapTambahan(cfg) {
+  if (!cfg || !cfg.length) return;
+  cfg.forEach(function(c) {
+    if (!c || !c.kode) return;
+    if (!T_BIN_NAMES[c.kode]) T_BIN_NAMES[c.kode] = { name: c.nama || c.kode, cap: Number(c.cap) || 0 };
+    else {
+      T_BIN_NAMES[c.kode].cap  = Number(c.cap) || 0;
+      if (c.nama) T_BIN_NAMES[c.kode].name = c.nama;
+    }
+  });
+}
 
 function renderLainlainList(rawData) {
   // Agregasi stok per bin T (kalau ada datanya)
@@ -3420,14 +3445,42 @@ function petaColorClass(used, cap) {
 
 var _capEditorCfg = [];
 
+// Modal "Kapasitas" ini punya 2 tab: "Rak Utama" (A-I, per-range baris — logic
+// asli) dan "Bin Tambahan" (T1-T36, per-bin — baru ditambahin biar T1-T36 juga
+// bisa diedit dari app, bukan cuma dari kode kayak dulu). _capEditorTab nentuin
+// tab mana yang lagi aktif; body & tombol Simpan nyesuain otomatis.
+var _capEditorTab = 'utama';
+var _capEditorTCfg = []; // working copy buat tab "Bin Tambahan"
+
 function openCapEditor() {
   // Clone ke working copy
   _capEditorCfg = PETA_CAP_CFG.map(function(c){ return {l:c.l,f:c.f,t:c.t,c:c.c}; });
+  _capEditorTCfg = Object.keys(T_BIN_NAMES).sort(function(a,b){ return parseInt(a.slice(1)) - parseInt(b.slice(1)); })
+    .map(function(k){ return { kode: k, nama: T_BIN_NAMES[k].name, cap: T_BIN_NAMES[k].cap }; });
+  _capEditorTab = 'utama';
+  _renderCapTabs();
   _renderCapEditor();
   document.getElementById('cap-editor-overlay').style.display = 'block';
 }
 
+function switchCapEditorTab(tab) {
+  _capEditorTab = tab;
+  _renderCapTabs();
+  _renderCapEditor();
+}
+
+function _renderCapTabs() {
+  var wrap = document.getElementById('cap-editor-tabs');
+  if (!wrap) return;
+  function tabBtn(key, label) {
+    var active = _capEditorTab === key;
+    return '<button onclick="switchCapEditorTab(\'' + key + '\')" style="flex:1;padding:8px;border-radius:8px;border:1px solid ' + (active ? '#f59e0b' : 'var(--border)') + ';background:' + (active ? '#f59e0b20' : 'var(--surface2)') + ';color:' + (active ? '#b45309' : 'var(--muted)') + ';font-size:11px;font-weight:800;cursor:pointer;">' + label + '</button>';
+  }
+  wrap.innerHTML = tabBtn('utama', 'Rak Utama (A-I)') + tabBtn('tambahan', 'Bin Tambahan (T1-T36)');
+}
+
 function _renderCapEditor() {
+  if (_capEditorTab === 'tambahan') { _renderTCapEditor(); return; }
   var body = document.getElementById('cap-editor-body');
   var groups = {};
   _capEditorCfg.forEach(function(c, idx) {
@@ -3498,11 +3551,67 @@ function deleteCapRange(idx) {
   _renderCapEditor();
 }
 
+// ── Tab "Bin Tambahan" (T1-T36) — list per-bin (bukan per-range kayak rak utama),
+// tiap baris punya nama (bebas diedit) & kapasitas. ──
+function _renderTCapEditor() {
+  var body = document.getElementById('cap-editor-body');
+  var html = '<div style="font-size:10px;color:var(--muted);margin-bottom:10px;">Nama & kapasitas bin tambahan (T1-T36) — dulu cuma bisa diubah lewat kode, sekarang tersimpan di sheet BIN_CAP_TAMBAHAN.</div>';
+  _capEditorTCfg.forEach(function(c, idx) {
+    html += '<div style="background:var(--surface2);border-radius:10px;padding:10px;margin-bottom:8px;border:1px solid var(--border);">'
+      + '<div style="font-size:11px;color:#f59e0b;font-weight:800;margin-bottom:6px;">' + c.kode + '</div>'
+      + '<div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;">'
+        + '<div><div style="font-size:9px;color:var(--muted);margin-bottom:3px;">Nama Lokasi</div>'
+          + '<input type="text" id="tcap-n-'+idx+'" value="'+escHtmlContent(c.nama)+'" oninput="_tCapSync('+idx+')" style="width:100%;padding:7px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text);font-size:12px;box-sizing:border-box;"></div>'
+        + '<div><div style="font-size:9px;color:var(--muted);margin-bottom:3px;">Kapasitas</div>'
+          + '<input type="number" id="tcap-c-'+idx+'" value="'+c.cap+'" min="0" oninput="_tCapSync('+idx+')" style="width:100%;padding:7px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text);font-size:14px;text-align:center;font-weight:700;box-sizing:border-box;"></div>'
+      + '</div>'
+    + '</div>';
+  });
+  body.innerHTML = html;
+}
+
+function _tCapSync(idx) {
+  var nEl = document.getElementById('tcap-n-' + idx);
+  var cEl = document.getElementById('tcap-c-' + idx);
+  if (!_capEditorTCfg[idx]) return;
+  if (nEl) _capEditorTCfg[idx].nama = nEl.value;
+  if (cEl) _capEditorTCfg[idx].cap  = parseInt(cEl.value) || 0;
+}
+
 function closeCapEditor() {
   document.getElementById('cap-editor-overlay').style.display = 'none';
 }
 
+function _saveTCapEditor() {
+  // Sync semua DOM values ke _capEditorTCfg sebelum save (jaga-jaga kalau
+  // ada input yang belum sempat trigger oninput, misal browser autofill)
+  _capEditorTCfg.forEach(function(c, idx) { _tCapSync(idx); });
+
+  // Update in-memory langsung biar Peta kebaca perubahannya tanpa nunggu
+  // round-trip server (sama kayak pola PETA_CAP_CFG di saveCapEditor 'utama')
+  _capEditorTCfg.forEach(function(c) {
+    if (!T_BIN_NAMES[c.kode]) T_BIN_NAMES[c.kode] = { name: c.nama, cap: c.cap };
+    else {
+      T_BIN_NAMES[c.kode].cap  = c.cap;
+      T_BIN_NAMES[c.kode].name = c.nama;
+    }
+  });
+
+  closeCapEditor();
+  petaRefresh();
+  gasCall('saveBinCapTambahan', { cfg: _capEditorTCfg }, function(res) {
+    if (!res || !res.ok) {
+      showToast('⚠️ Kapasitas diupdate lokal, gagal simpan ke server: ' + (res ? res.msg : 'Error'), 4000);
+      return;
+    }
+    showToast('✅ Kapasitas bin tambahan disimpan');
+  }, function() {
+    showToast('⚠️ Kapasitas diupdate lokal, gagal simpan ke server');
+  });
+}
+
 function saveCapEditor() {
+  if (_capEditorTab === 'tambahan') { _saveTCapEditor(); return; }
   // Sync semua DOM values ke _capEditorCfg sebelum save
   _capEditorCfg.forEach(function(c, idx) {
     var fEl = document.getElementById('cap-f-' + idx);
@@ -3546,12 +3655,21 @@ function petaRefresh() {
 function petaLoadMap() {
   // Cap config SELALU di-fetch ulang tiap buka tab Peta (request ringan) —
   // supaya kalau device lain baru saja edit kapasitas, perubahan langsung
-  // kebaca di sini tanpa perlu reload app.
+  // kebaca di sini tanpa perlu reload app. Sama buat kapasitas bin tambahan
+  // (T1-T36) — dua-duanya jalan paralel, render peta nunggu dua-duanya kelar.
+  var capDone = false, tcapDone = false;
+  function tryProceed() { if (capDone && tcapDone) _petaAfterCapLoad(); }
   gasCall('getBinCapConfig', {}, function(capResult) {
     if (capResult && capResult.cfg && capResult.cfg.length) PETA_CAP_CFG = capResult.cfg;
-    _petaAfterCapLoad();
+    capDone = true; tryProceed();
   }, function() {
-    _petaAfterCapLoad(); // gagal fetch cap → tetap lanjut pakai cap yang ada di memory
+    capDone = true; tryProceed(); // gagal fetch cap → tetap lanjut pakai cap yang ada di memory
+  });
+  gasCall('getBinCapTambahan', {}, function(res) {
+    if (res && res.ok) _applyBinCapTambahan(res.cfg);
+    tcapDone = true; tryProceed();
+  }, function() {
+    tcapDone = true; tryProceed();
   });
 }
 
@@ -7494,6 +7612,7 @@ window.addEventListener('load', function() {
       </div>
       <button onclick="closeCapEditor()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--muted);">✕</button>
     </div>
+    <div id="cap-editor-tabs" style="display:flex;gap:6px;padding:12px 20px 0 20px;"></div>
     <div id="cap-editor-body" style="padding:16px 20px;max-height:60vh;overflow-y:auto;"></div>
     <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;">
       <button onclick="closeCapEditor()" style="flex:1;padding:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-weight:700;color:var(--muted);cursor:pointer;">Batal</button>
@@ -8267,12 +8386,23 @@ function _p3dBuildRotateScene() {
     var hasItems = info && info.items && info.items.length > 0;
 
     if (hasItems) {
-      // Terisi — susun pallet asli ke slot grid w×d, warna ngikut p3dColorForItem
+      // Terisi — susun pallet asli ke slot grid w×d, warna ngikut p3dColorForItem.
+      // Dulu render kotak MENTOK di jumlah slot fisik (w×d aja) — begitu udah
+      // kepenuhan, unit selanjutnya (dari `u < units && slotPtr < order.length`)
+      // DIAM-DIAM GAK DIGAMBAR SAMA SEKALI, ilang tanpa jejak visual walau stoknya
+      // beneran ada di sistem (misal bin kapasitas 5 tapi isinya kecatet 10 —
+      // cuma 5 kotak pertama yang kelihatan, sisanya lenyap). Sekarang kalau isi
+      // lebih dari slot yang ada, DITUMPUK ke atas (lapis ke-2, ke-3, dst) persis
+      // di slot yang sama — sama kayak fisiknya beneran ditumpuk — plus label
+      // kecil "×N tumpuk" di atas biar langsung kelihatan tanpa harus itung kotak.
       var slotsX = Math.max(1, Math.round(w));
       var slotsZ = Math.max(1, Math.round(d));
       var order = [];
       for (var sz = 0; sz < slotsZ; sz++) for (var sx = 0; sx < slotsX; sx++) order.push([sx, sz]);
+      var slotCount = order.length;
       var slotPtr = 0;
+      var maxLayerSeen = 0;
+      var LAYER_H = 0.92; // tinggi 1 lapis (0.8 kotak barang + 0.12 alas pallet)
       var palletMat = new THREE.MeshStandardMaterial({ color: 0x946d1c, roughness: 0.8 });
       info.items.forEach(function(item) {
         var pecList = (item.pecahan_list && item.pecahan_list.length > 0) ? item.pecahan_list : ((item.pecahan||0) > 0 ? [item.pecahan] : []);
@@ -8280,17 +8410,26 @@ function _p3dBuildRotateScene() {
         var colorHex = (typeof p3dColorForItem === 'function') ? p3dColorForItem(item) : '#94a3b8';
         var colorInt = parseInt(colorHex.replace('#','0x'));
         var itemMat = new THREE.MeshStandardMaterial({ color: colorInt, roughness: 0.6 });
-        for (var u = 0; u < units && slotPtr < order.length; u++, slotPtr++) {
-          var boxX = bx0 + order[slotPtr][0] + 0.5;
-          var boxZ = bz0 + order[slotPtr][1] + 0.5;
+        for (var u = 0; u < units; u++, slotPtr++) {
+          var slotIdx = slotPtr % slotCount;
+          var layer   = Math.floor(slotPtr / slotCount);
+          if (layer > maxLayerSeen) maxLayerSeen = layer;
+          var yOff = layer * LAYER_H;
+          var boxX = bx0 + order[slotIdx][0] + 0.5;
+          var boxZ = bz0 + order[slotIdx][1] + 0.5;
           var boxMesh = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.8, 0.86), itemMat);
-          boxMesh.position.set(boxX, 0.5 + 0.06, boxZ);
+          boxMesh.position.set(boxX, 0.5 + 0.06 + yOff, boxZ);
           framesGroup.add(boxMesh);
           var pMesh = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.12, 0.9), palletMat);
-          pMesh.position.set(boxX, 0.06, boxZ);
+          pMesh.position.set(boxX, 0.06 + yOff, boxZ);
           framesGroup.add(pMesh);
         }
       });
+      if (maxLayerSeen > 0) {
+        var stackLbl = _p3dMakeLabelSprite('×' + (maxLayerSeen + 1) + ' tumpuk', { canvasW: 90, canvasH: 40, fontPx: 18, scale: [1.4, 0.7, 1], bg: 'rgba(220,38,38,0.9)', border: 'rgba(255,255,255,0.7)' });
+        stackLbl.position.set(cx, 0.9 + (maxLayerSeen + 1) * LAYER_H, cz);
+        labelsGroup.add(stackLbl);
+      }
     }
 
     var lbl = _p3dMakeLabelSprite(label, { canvasW: 100, canvasH: 50, fontPx: 22, scale: [1.8, 0.9, 1], bg: 'rgba(120,80,30,0.85)', border: 'rgba(255,255,255,0.6)' });
