@@ -1740,12 +1740,31 @@ function gasCall(action, params, onSuccess, onError) {
 // submit di-generate SEKALI lalu dipakai ulang selama belum sukses; baru
 // di-clear pas sukses ATAU pas operator mulai transaksi baru (scan ulang/reset
 // form) supaya requestId lama gak "nyangkut" ke transaksi lain yang beda.
+// PENTING: requestId dulu cuma disimpan di variabel JS di memory (_pendingReqId),
+// jadi kalau app di-reload/di-restart PAS lagi nunggu respons submit yang lambat
+// (WiFi gudang lemot, GAS lagi antre lock, dll), state itu ilang total — begitu
+// operator submit ulang, kode generate requestId yang BARU. Kalau ternyata submit
+// yang PERTAMA itu sebenarnya sukses diproses di server (cuma respons-nya yang gak
+// pernah nyampe balik ke HP), guard idempotency di Code.gs jadi gak ngenalin submit
+// kedua sebagai retry sama sekali (beda requestId) → dobel ketulis di sheet. Sekarang
+// requestId dicadangkan juga ke localStorage, jadi tetap sama walau app di-reload.
 var _pendingReqId = {};
+var _REQID_LS_PREFIX = 'binloc_reqid_';
 function _getRequestId(key) {
-  if (!_pendingReqId[key]) _pendingReqId[key] = Date.now() + '-' + Math.random().toString(36).slice(2, 10);
-  return _pendingReqId[key];
+  if (_pendingReqId[key]) return _pendingReqId[key];
+  try {
+    var stored = localStorage.getItem(_REQID_LS_PREFIX + key);
+    if (stored) { _pendingReqId[key] = stored; return stored; }
+  } catch (e) { /* localStorage penuh/disabled — tetap jalan pakai in-memory aja */ }
+  var id = Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+  _pendingReqId[key] = id;
+  try { localStorage.setItem(_REQID_LS_PREFIX + key, id); } catch (e) {}
+  return id;
 }
-function _clearRequestId(key) { _pendingReqId[key] = null; }
+function _clearRequestId(key) {
+  _pendingReqId[key] = null;
+  try { localStorage.removeItem(_REQID_LS_PREFIX + key); } catch (e) {}
+}
 
 // Backend balikin pesan ini spesifik kalau LockService.tryLock() timeout (ada
 // transaksi operator LAIN yang lagi diproses bareng — lock-nya GLOBAL, jadi
@@ -8805,4 +8824,4 @@ function _p3dBuildRotateScene() {
 </script>
 
 </body>
-  </html>
+</html>
