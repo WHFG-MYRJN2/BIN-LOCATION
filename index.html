@@ -6240,12 +6240,17 @@ function plBuildAndDownload(tipe, rawData) {
     var kode = r.skuKode, nama = r.skuNama || '';
     if (!skuMap[kode]) skuMap[kode] = { nama: nama, prodates: {} };
     var pd = r.prodate || '-';
-    if (!skuMap[kode].prodates[pd]) skuMap[kode].prodates[pd] = { pallet: 0, pecList: [], bins: {} };
+    if (!skuMap[kode].prodates[pd]) skuMap[kode].prodates[pd] = { pallet: 0, pecList: [], bins: {}, quotations: {} };
     var e = skuMap[kode].prodates[pd];
     e.pallet += r.pallet || 0;
     var pecList = (r.pecahan_list && r.pecahan_list.length > 0) ? r.pecahan_list : ((r.pecahan||0) > 0 ? [r.pecahan] : []);
     pecList.forEach(function(v){ e.pecList.push(v); });
     if (r.binLoc) e.bins[r.binLoc] = true;
+    // QT (quotation) cuma relevan buat tipe EKSPOR — tapi tetap dikumpulin di sini
+    // gak peduli tipe-nya apa (murah, gak nambah beban), baru dipakai/ditampilkan
+    // belakangan kalau tipe === 'EKSPOR'. Dikumpulin per prodate (bukan digabung
+    // satu SKU) soalnya satu SKU bisa punya beberapa prodate dengan QT beda-beda.
+    if (r.quotation) e.quotations[r.quotation] = true;
   });
 
   var skuCodes = Object.keys(skuMap).sort();
@@ -6268,7 +6273,8 @@ function plBuildAndDownload(tipe, rawData) {
       var totalKtn = (e.pallet * std) + pecSum;
       var posisi   = Object.keys(e.bins).sort().join(', ');
       var pecDisp  = e.pecList.length ? e.pecList.join('+') : '0';
-      return { pd: pd, pallet: e.pallet, pecDisp: pecDisp, totalKtn: totalKtn, posisi: posisi };
+      var qt       = Object.keys(e.quotations).sort().join(', ') || '-';
+      return { pd: pd, pallet: e.pallet, pecDisp: pecDisp, totalKtn: totalKtn, posisi: posisi, qt: qt };
     });
     var skuTotalKarton = rows.reduce(function(a,r){ return a+r.totalKtn; }, 0);
     var skuTotalPallet = rows.reduce(function(a,r){ return a+r.pallet; }, 0);
@@ -6284,6 +6290,7 @@ function plBuildAndDownload(tipe, rawData) {
         tableRows += '<td rowspan="'+span+'" style="font-weight:700;border-right:1px solid #e5e7eb;vertical-align:middle;">'+escHtml(String(sObj.nama))+'</td>';
       }
       tableRows += '<td style="text-align:center;">'+escHtml(r.pd)+'</td>';
+      if (tipe === 'EKSPOR') tableRows += '<td style="text-align:center;font-family:monospace;font-size:10px;">'+escHtml(r.qt)+'</td>';
       tableRows += '<td style="text-align:center;font-weight:bold;">'+r.pallet+'</td>';
       tableRows += '<td style="text-align:center;">'+r.pecDisp+'</td>';
       tableRows += '<td style="text-align:center;font-weight:bold;">'+r.totalKtn+'</td>';
@@ -6328,6 +6335,7 @@ function plBuildAndDownload(tipe, rawData) {
       + '<th style="width:65px;">SKU</th>'
       + '<th style="width:150px;">Nama Barang</th>'
       + '<th style="width:85px;text-align:center;">Prodate</th>'
+      + (tipe === 'EKSPOR' ? '<th style="width:75px;text-align:center;">QT</th>' : '')
       + '<th style="width:45px;text-align:center;">Qty Pallet</th>'
       + '<th style="width:55px;text-align:center;">Qty Pecahan</th>'
       + '<th style="width:65px;text-align:center;">Qty Total (krt)</th>'
