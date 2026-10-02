@@ -677,6 +677,11 @@ input:focus, select:focus {
       <div class="card-label" style="color:#9333ea">Stock Opname</div>
       <div class="card-desc">Input opname FIFO — tabel multi-baris</div>
     </div>
+    <div class="tipe-card" style="border-color:#0d948840;background:#0d948808;" onclick="openSkuBaruForm()">
+      <div class="card-icon">➕</div>
+      <div class="card-label" style="color:#0d9488">Tambah SKU Baru</div>
+      <div class="card-desc">Daftarin barang baru ke master STD</div>
+    </div>
 
   </div>
 
@@ -686,6 +691,62 @@ input:focus, select:focus {
       🔄 <span id="update-app-label">Update App</span>
     </button>
     <div id="splash-version" style="font-size:10px;color:var(--muted);opacity:.6;font-family:var(--mono);letter-spacing:1px;"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════
+     SCREEN: TAMBAH SKU BARU
+     Nulis baris baru ke sheet STD (master SKU) — lihat saveNewSku() di Code.gs.
+     Kolom D (JENIS_PLANT = WAFER/BISKUIT) diturunkan OTOMATIS dari Plant, operator
+     gak milih itu langsung — mengurangi kemungkinan salah pasang antara Plant & jenis.
+═══════════════════════════════ -->
+<div class="screen" id="screen-sku-baru">
+  <div class="app-header">
+    <div class="back-btn" onclick="goHome()">←</div>
+    <div class="title-group"><h2>Tambah SKU Baru</h2><div class="sub">Daftarin barang baru ke master STD</div></div>
+  </div>
+  <div style="padding:0 16px 100px;">
+    <div style="margin-top:14px;">
+      <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;">Kode SKU</label>
+      <input type="text" id="skub-kode" placeholder="Misal 422085" autocapitalize="characters"
+        style="width:100%;margin-top:6px;padding:11px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;box-sizing:border-box;font-family:var(--mono);">
+    </div>
+
+    <div style="margin-top:14px;">
+      <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;">Nama Barang</label>
+      <input type="text" id="skub-nama" placeholder="Misal MALKIST AMERICA STYLE 75G"
+        style="width:100%;margin-top:6px;padding:11px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;box-sizing:border-box;">
+    </div>
+
+    <div style="margin-top:14px;">
+      <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;">STD Pallet (karton/pallet)</label>
+      <input type="number" id="skub-std" min="1" placeholder="0"
+        style="width:100%;margin-top:6px;padding:11px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;box-sizing:border-box;text-align:center;">
+    </div>
+
+    <div style="margin-top:14px;">
+      <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;">Plant</label>
+      <select id="skub-plant"
+        style="width:100%;margin-top:6px;padding:11px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;box-sizing:border-box;appearance:none;">
+        <option value="">-- Pilih Plant --</option>
+        <option value="1111">1111</option>
+        <option value="1112">1112</option>
+        <option value="1113">1113</option>
+      </select>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px;">Kolom "Jenis Plant" (WAFER/BISKUIT) keisi otomatis dari sini — 1111 = WAFER, 1112/1113 = BISKUIT.</div>
+    </div>
+
+    <div style="margin-top:14px;">
+      <label style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;">Jenis</label>
+      <select id="skub-jenis"
+        style="width:100%;margin-top:6px;padding:11px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:14px;box-sizing:border-box;appearance:none;">
+        <option value="">-- Pilih Jenis --</option>
+        <option value="EKSPOR">EKSPOR</option>
+        <option value="LOKAL">LOKAL</option>
+      </select>
+    </div>
+
+    <button onclick="submitSkuBaru()" id="skub-submit-btn" style="width:100%;margin-top:22px;padding:13px;border-radius:12px;border:none;background:#0d9488;color:#fff;font-size:14px;font-weight:800;cursor:pointer;">💾 Simpan SKU Baru</button>
   </div>
 </div>
 
@@ -2133,6 +2194,70 @@ function _loadBinSkuList(attempt) {
       }
     }
   );
+}
+
+// ═══════════════════════════════
+// TAMBAH SKU BARU
+// ═══════════════════════════════
+// STD_PLANT_JENIS SENGAJA di-duplikasi dari Code.gs (bukan di-fetch) — cuma dipakai
+// buat preview "Jenis Plant" di layar sebelum submit, sumber kebenaran yang BENERAN
+// nulis ke kolom D tetap di server (saveNewSku), jadi kalaupun mapping ini kedaluwarsa
+// di frontend, data yang ketulis ke sheet tetap konsisten sama logic backend.
+var STD_PLANT_JENIS = { '1111': 'WAFER', '1112': 'BISKUIT', '1113': 'BISKUIT' };
+var _skuBaruInFlight = false;
+
+function openSkuBaruForm() {
+  document.getElementById('skub-kode').value  = '';
+  document.getElementById('skub-nama').value  = '';
+  document.getElementById('skub-std').value   = '';
+  document.getElementById('skub-plant').value = '';
+  document.getElementById('skub-jenis').value = '';
+  showScreen('screen-sku-baru');
+  setTimeout(function(){ document.getElementById('skub-kode').focus(); }, 300);
+}
+
+function submitSkuBaru() {
+  if (_skuBaruInFlight) return;
+  var kode  = document.getElementById('skub-kode').value.trim().toUpperCase();
+  var nama  = document.getElementById('skub-nama').value.trim();
+  var std   = Number(document.getElementById('skub-std').value) || 0;
+  var plant = document.getElementById('skub-plant').value;
+  var jenis = document.getElementById('skub-jenis').value;
+
+  if (!kode)            { showToast('❌ Kode SKU belum diisi'); return; }
+  if (!nama)            { showToast('❌ Nama barang belum diisi'); return; }
+  if (std <= 0)         { showToast('❌ STD Pallet harus lebih dari 0'); return; }
+  if (!plant)           { showToast('❌ Plant belum dipilih'); return; }
+  if (!jenis)           { showToast('❌ Jenis (EKSPOR/LOKAL) belum dipilih'); return; }
+
+  // Cek dobel di sisi client dulu (dari skuData yang udah ke-load) — cuma buat kasih
+  // feedback CEPAT ke operator, BUKAN pengganti cek server. saveNewSku() di Code.gs
+  // tetap ngecek ulang dari sheet langsung sebelum nulis (sumber kebenaran sebenarnya),
+  // jadi aman walau skuData di device ini kebetulan belum ke-refresh dari device lain.
+  var dupe = (skuData || []).some(function(s){ return s.kode === kode; });
+  if (dupe) { showToast('❌ SKU ' + kode + ' udah ada di master STD'); return; }
+
+  _skuBaruInFlight = true;
+  var btn = document.getElementById('skub-submit-btn');
+  if (btn) btn.disabled = true;
+  showLoading(true);
+  gasCall('saveNewSku', { kode: kode, nama: nama, std: std, plant: plant, jenis: jenis }, function(res) {
+    _skuBaruInFlight = false;
+    if (btn) btn.disabled = false;
+    showLoading(false);
+    if (res && res.ok) {
+      showToast('✅ SKU ' + kode + ' berhasil ditambahkan (' + (res.jenisPlant || STD_PLANT_JENIS[plant]) + ')');
+      _loadBinSkuList(0); // refresh daftar SKU di memory biar langsung kepakai tanpa reload app
+      goHome();
+    } else {
+      showToast('❌ Gagal: ' + (res ? res.msg : 'Error'));
+    }
+  }, function(err) {
+    _skuBaruInFlight = false;
+    if (btn) btn.disabled = false;
+    showLoading(false);
+    showToast('❌ Error: ' + ((err && err.message) || 'Gagal nyimpen'));
+  });
 }
 
 window.addEventListener('DOMContentLoaded', function() {
